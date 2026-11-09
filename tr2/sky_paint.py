@@ -19,7 +19,7 @@ from tr2 import core, palette
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "build", "cache", "sky")
 os.makedirs(CACHE, exist_ok=True)
-VERSION = 3
+VERSION = 4
 
 
 def cached(name, make):
@@ -173,49 +173,55 @@ def _shift(a, dx, dy):
 
 def _puffs(r, w, h, kind):
     """Cloud anatomy: big lumps on a flat base, smaller lumps budding from
-    their upper sides, smaller again on those. Returns (x, y, radius, xstretch)."""
+    their faces and upper sides, smaller again on those.
+    Returns rows (x, y, radius, xstretch, z offset toward the viewer)."""
     puffs = []
     if kind == "cumulus":
-        nm = int(r.integers(3, 6))
+        nm = int(r.integers(4, 8))
         xs = np.sort(r.uniform(0.0, 1.0, nm))
         peak = r.uniform(0.3, 0.7)
         for x in xs:
-            env = max(0.0, 1 - ((x - peak) / 0.62) ** 2)
-            R = (0.5 + 0.9 * env) * r.uniform(0.8, 1.15)
-            puffs.append((x * 3.6, -R * 0.5, R, 1.0))
-        counts, stretch = (int(r.integers(3, 6)), int(r.integers(3, 5))), 1.0
+            env = max(0.0, 1 - ((x - peak) / 0.6) ** 2)
+            R = (0.38 + 0.95 * env) * r.uniform(0.8, 1.15)
+            puffs.append((x * 5.2, -R * 0.72, R, 1.0, 0.0))
+        counts, stretch = (int(r.integers(5, 8)), int(r.integers(4, 6))), 1.0
     elif kind == "tower":
-        nm = int(r.integers(2, 4))
+        nm = int(r.integers(3, 5))
         for k in range(nm):
-            R = r.uniform(0.8, 1.2)
-            puffs.append((k * 1.2 + r.uniform(-0.2, 0.2), -R * 0.5, R, 1.0))
+            R = r.uniform(0.7, 1.15)
+            puffs.append((k * 1.25 + r.uniform(-0.2, 0.2), -R * 0.72, R, 1.0, 0.0))
         top = puffs[int(r.integers(0, nm))]
         y = top[1]
         x = top[0]
         for k in range(int(r.integers(2, 4))):
-            R = r.uniform(0.7, 1.0) * (0.9 ** k)
+            R = r.uniform(0.75, 1.0) * (0.88 ** k)
             y -= R * 0.95
-            x += r.uniform(-0.35, 0.35)
-            puffs.append((x, y, R, 1.0))
-        counts, stretch = (int(r.integers(4, 6)), 4), 1.0
+            x += r.uniform(-0.4, 0.4)
+            puffs.append((x, y, R, 1.0, 0.0))
+        counts, stretch = (int(r.integers(5, 8)), 5), 1.0
     else:  # bar: a long flat bank
         nm = int(r.integers(9, 15))
         x = 0.0
         for k in range(nm):
             env = math.sin(math.pi * (k + 0.5) / nm) ** 0.6
             R = (0.35 + 0.5 * env) * r.uniform(0.7, 1.2)
-            puffs.append((x, -R * 0.42, R, 2.3))
+            puffs.append((x, -R * 0.6, R, 2.3, 0.0))
             x += R * r.uniform(1.5, 2.6)
-        counts, stretch = (int(r.integers(2, 4)), 2), 1.8
+        counts, stretch = (int(r.integers(3, 5)), 3), 1.8
     lvl = list(puffs)
     for depth, cnt in enumerate(counts):
         new = []
-        for (x, y, R, st) in lvl:
-            for _ in range(cnt):
-                a = r.uniform(-2.85, -0.3)
-                d = R * r.uniform(0.6, 0.92)
-                rr = R * r.uniform(0.34, 0.6)
-                new.append((x + math.cos(a) * d * st, y + math.sin(a) * d, rr, stretch))
+        for (x, y, R, st, z0) in lvl:
+            for q in range(cnt):
+                if q % 3 != 2:      # on the upper outline
+                    a = r.uniform(-2.9, -0.25)
+                    d = r.uniform(0.62, 0.95)
+                else:               # on the face, toward the viewer
+                    a = r.uniform(-math.pi, math.pi * 0.25)
+                    d = r.uniform(0.15, 0.7)
+                rr = R * r.uniform(0.30, 0.56)
+                zc = z0 + R * math.sqrt(max(0.0, 1 - d * d)) * 0.9 - rr * 0.45
+                new.append((x + math.cos(a) * d * R * st, y + math.sin(a) * d * R, rr, stretch, zc))
         puffs += new
         lvl = new
     p = np.array(puffs, np.float64)
@@ -229,6 +235,7 @@ def _puffs(r, w, h, kind):
     p[:, 0] = (p[:, 0] - (x0 + x1) / 2) * sc + w / 2
     p[:, 1] = p[:, 1] * sc + base
     p[:, 2] *= sc
+    p[:, 4] *= sc
     return p, base
 
 
@@ -269,7 +276,7 @@ def cloud_fields(kind, seed, z=0.0):
     X = xx + wx
     Y = yy + wy
     zf = np.zeros((h, w), np.float32)
-    for (cx, cy, R, st) in p:
+    for (cx, cy, R, st, z0) in p:
         x0 = max(0, int(cx - R * st - 50))
         x1 = min(w, int(cx + R * st + 50))
         y0 = max(0, int(cy - R - 50))
@@ -278,10 +285,11 @@ def cloud_fields(kind, seed, z=0.0):
             continue
         d2 = ((X[y0:y1, x0:x1] - cx) / st) ** 2 + (Y[y0:y1, x0:x1] - cy) ** 2
         zz = np.sqrt(np.maximum(R * R - d2, 0.0))
+        zz = np.where(zz > 0, zz + z0, 0.0)
         np.maximum(zf[y0:y1, x0:x1], zz, out=zf[y0:y1, x0:x1])
     # flat, slightly ragged base
-    bw = (core.fbm(h, w, 160, 3, sd + 9, aspect=3.0) - 0.5) * 34 * S
-    cut = 1 - ss(base - 10 * S + bw, base + 12 * S + bw, yy)
+    bw = (core.fbm(h, w, 150, 4, sd + 9, aspect=2.5) - 0.5) * 70 * S
+    cut = 1 - ss(base - 30 * S + bw, base + 12 * S + bw, yy)
     zf *= cut
     a = ss(0.5, 5.0 * S, zf)
     # softer, dry brushed edge low on the shadow side
@@ -289,12 +297,14 @@ def cloud_fields(kind, seed, z=0.0):
     fine = core.fbm(h, w, 7, 2, sd + 10)
     a = a * (1 - low * 0.5 * ss(0.35, 0.75, fine) * (1 - ss(6 * S, 26 * S, zf)))
     # form light from the union of spheres
-    zs = ndimage.gaussian_filter(zf, 1.6 * S)
-    gy, gx = np.gradient(zs)
-    k = 1.0
-    nrm = np.sqrt(gx * gx + gy * gy + k * k)
+    # two scales: the big masses carry the light, the small lumps only break it
     lx, ly, lz = 0.60, -0.62, 0.50
-    lam = (-gx * lx - gy * ly + k * lz) / nrm
+    lam = 0.0
+    for sg, wgt, k in ((9.0 * S, 0.62, 0.55), (2.6 * S, 0.38, 1.0)):
+        zs = ndimage.gaussian_filter(zf, sg)
+        gy, gx = np.gradient(zs)
+        nrm = np.sqrt(gx * gx + gy * gy + k * k)
+        lam = lam + wgt * (-gx * lx - gy * ly + k * lz) / nrm
     lam = np.clip(lam, -0.2, 1.0)
     # how much cloud lies between this point and the sun
     ab = ndimage.gaussian_filter(a, 3.0 * S)
@@ -302,9 +312,9 @@ def cloud_fields(kind, seed, z=0.0):
     step = 9.0 * S
     for s in range(1, 15):
         mass += _shift(ab, -int(round(lx * step * s)), -int(round(ly * step * s))) * (1.0 - s / 18.0)
-    trans = np.exp(-mass * 0.26)
-    under = ss(base - (150 if kind != "bar" else 90) * S, base - 8 * S, yy)
-    light = 0.10 + 0.42 * np.clip(lam, 0, 1) * (0.3 + 0.7 * trans) + 0.52 * trans - 0.30 * under * (1 - 0.5 * trans)
+    trans = np.exp(-mass * 0.11)
+    under = ss(base - (230 if kind != "bar" else 110) * S, base - 4 * S, yy) ** 1.6
+    light = 0.12 + 0.66 * np.clip(lam, 0, 1) * (0.5 + 0.5 * trans) + 0.24 * trans - 0.20 * under * (1 - 0.5 * trans)
     # a thin bounce of light on the very bottom lumps
     light += 0.10 * ss(base - 26 * S, base - 4 * S, yy) * (1 - ss(0, 30 * S, zf))
     # brush: tonal planes get stroke shaped borders
@@ -331,10 +341,10 @@ def tones(tod, sky_c=None, haze=0.0, strength=1.0):
     hi = np.clip(palette.mix(lit, rimc, 0.35) * 1.10 + 0.05 * lum, 0, 1)
     sh = white * amb * (0.86 + 0.5 * lum * 0.3)
     if sky_c is not None:
-        sh = palette.mix(sh, sky_c, 0.32)
+        sh = palette.mix(sh, sky_c, 0.42)
     g = sh.mean()
     sh = np.clip(g + (sh - g) * 1.25, 0, 1)
-    deep = np.clip(sh * np.array([0.74, 0.74, 0.86], np.float32), 0, 1)
+    deep = np.clip(sh * np.array([0.83, 0.82, 0.92], np.float32), 0, 1)
     turn = palette.mix(lit, sh, 0.52) * np.array([1.10, 0.93, 0.95], np.float32)
     cols = [deep, sh, np.clip(turn, 0, 1), lit, hi]
     if sky_c is not None and haze > 0:

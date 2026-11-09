@@ -29,9 +29,9 @@ R = palette.ROCKET
 D2R = math.pi / 180.0
 
 VIEWS = dict(
-    side=dict(e=0.075, k=0.0, yaw=0.0),
-    low34=dict(e=0.30, k=0.20, yaw=0.50),
-    below=dict(e=0.62, k=0.85, yaw=0.50),
+    side=dict(e=0.03, e1=0.10, k=0.0, yaw=0.0),
+    low34=dict(e=0.07, e1=0.40, k=0.20, yaw=0.50),
+    below=dict(e=0.50, e1=0.22, k=0.85, yaw=0.50),
 )
 
 
@@ -52,7 +52,8 @@ PROF = dict(
     nozzle=[(56, 41), (62, 42.5), (70, 39), (102, 30)],
     skirt=[(98, 50), (104, 52.5), (128, 49), (152, 45.5), (156, 47)],
     body=[(154, 44), (200, 45.5), (262, 45), (332, 42)],
-    cup=[(326, 31), (331, 37), (337, 35), (350, 50), (368, 60.5), (392, 67), (418, 70.5), (428, 72.5)],
+    saucer=[(323, 34), (326, 55), (330, 61), (333, 59)],
+    cup=[(330, 31), (334, 36), (339, 35), (351, 50), (368, 60), (392, 66.5), (416, 70.5), (428, 75)],
     kettle=[(424, 66), (431, 63), (446, 60.5), (462, 51.5), (476, 38), (486, 23), (491, 11)],
     knob=[(490, 4.5), (494, 4), (498, 8), (503, 7.5), (506, 3)],
 )
@@ -70,7 +71,8 @@ def _prof(name, n=5):
 class _Proj:
     def __init__(self, x, y, s, rot, view, st):
         v = VIEWS[view]
-        self.e, self.k, self.yaw = v["e"], v["k"], v["yaw"]
+        self.e0, self.e1, self.k, self.yaw = v["e"], v["e1"], v["k"], v["yaw"]
+        self.e = self.e0 + 0.5 * self.e1
         self.s = s
         self.rot = rot + st.shake[2]
         self.sx = 1 + 0.11 * st.squash
@@ -86,7 +88,8 @@ class _Proj:
                                       np.asarray(a, np.float64))
         sc = self.sc(h)
         lx = r * np.sin(a) * sc * self.sx
-        ly = (-(h * sc * (1 + 0.45 * self.k)) - r * self.e * np.cos(a) * sc) * self.sy
+        e = self.e0 + self.e1 * np.clip(h, 0, 520) / 500.0      # rings arch more the higher above the eye
+        ly = (-(h * sc * (1 + 0.45 * self.k)) - r * e * np.cos(a) * sc) * self.sy
         c, sn = math.cos(self.rot), math.sin(self.rot)
         return np.c_[(self.ox + (lx * c - ly * sn) * self.s).ravel(),
                      (self.oy + (lx * sn + ly * c) * self.s).ravel()]
@@ -133,8 +136,8 @@ class _Draw:
     def hot(self, c, k=1.0):
         """Local colour under the fire light from below."""
         c = np.asarray(c, np.float32)
-        f = np.clip(c * self.fire * 1.45 + self.fire * 0.10, 0, 1)
-        return palette.mix(self.lit(c), f, min(1.0, 0.85 * k))
+        f = np.clip(c * np.array([1.30, 0.93, 0.56], np.float32) + self.fire * 0.05, 0, 1)
+        return palette.mix(self.lit(c), f, min(1.0, 0.9 * k))
 
     def sooty(self, c, k):
         return palette.mix(c, SOOT * (0.6 + 0.6 * self.T["amb"]), k)
@@ -167,6 +170,9 @@ class _Draw:
         top = pr.P(hs[-1], rs[-1], arc[1:-1])
         bot = pr.P(hs[0], rs[0], np.linspace(hp, 3 * hp, 26)[1:-1])
         lit, shd = self.lit(col), self.shd(col)
+        if name == "body":                      # hand rolled paper is never a true cylinder
+            left = core.wobble(left, 1.5 * pr.s, 11, 0.012)
+            right = core.wobble(right, 1.5 * pr.s, 12, 0.012)
         outline = self.wob(np.vstack([left, top, right, bot]), 0.5)
         self.c.fill(outline, lit)
 
@@ -199,7 +205,7 @@ class _Draw:
         b0, b1 = (1.30, hp) if self.sun_r else (-hp, -1.30)
         self.c.fill(patch(h0, h1, b0, b1), self.rimc(col))
         # underside disc (seen when the view is low)
-        if pr.e > 0.15:
+        if pr.e0 + pr.e1 * h0 / 500.0 > 0.11:
             uc = self.shd(col) * 0.8 if under is None else under
             disc = pr.P(h0, rs[0] * 0.96, np.linspace(0, 2 * math.pi, 40, endpoint=False))
             self.c.fill(disc, uc)
@@ -499,8 +505,8 @@ def _body_details(d):
             lit = (th0 + th1) * 0.5 * D2R + pr.yaw > -0.36 if d.sun_r else (th0 + th1) * 0.5 * D2R + pr.yaw < 0.36
             d.fill(p, d.lit(c) if lit else d.shd(c), ink=0.6, wob=0.7)
     # stars painted on by paw, with drips
-    for h, th, size, sd in ((300, 12, 12.5, 0), (262, -18, 7.5, 1), (212, 40, 6.0, 2), (196, 2, 10.0, 3),
-                            (176, 58, 5.0, 4), (312, 52, 5.5, 5), (238, -58, 6.5, 6), (286, -62, 4.5, 7),
+    for h, th, size, sd in ((298, 12, 15.0, 0), (258, -16, 9.0, 1), (212, 40, 7.0, 2), (194, -24, 12.0, 3),
+                            (176, 58, 6.0, 4), (310, 52, 7.0, 5), (238, -62, 7.5, 6), (286, -66, 5.5, 7),
                             (222, 96, 8.0, 8), (300, 128, 9.0, 9), (190, -110, 9.0, 10)):
         t = th * D2R
         if not d.visible(t, 0.12):
@@ -593,14 +599,16 @@ def draw(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=No
     tin_soot = d.sooty(R["tin"], 0.35)
     d.solid("knob", R["copper"], fire_frac=0.0)
     d.solid_ink()
-    d.solid("kettle", R["kettle"], fire_frac=0.16)
+    d.solid("kettle", R["kettle"], fire_frac=0.0)
     _kettle_details(d)
     d.solid_ink()
-    d.solid("cup", R["cup"], fire_frac=0.34)
+    d.solid("cup", R["cup"], fire_frac=0.36)
     _cup_details(d)
     d.solid_ink()
     win_poly, win = _window(d)
-    d.solid("body", R["paper"], fire_frac=0.2, soot_frac=0.3)
+    d.solid("saucer", R["cup"], fire_frac=1.0)
+    d.solid_ink()
+    d.solid("body", R["paper"], fire_frac=0.07, soot_frac=0.3)
     _body_details(d)
     d.solid_ink()
     d.solid("skirt", R["tin"], fire_frac=0.5, soot_frac=0.7)

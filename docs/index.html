@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tiny Rocket</title>
+<meta name="description" content="Tiny Rocket: a short anime film where every frame and every sound is code written by Fable 5.2.">
+<meta property="og:title" content="Tiny Rocket">
+<meta property="og:description" content="A short anime film. Every frame and every sound is code written by Fable 5.2.">
+<meta property="og:type" content="video.other">
+<meta property="og:image" content="https://jayypatel18.github.io/tiny-rocket-5-2/poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#000000">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: grid; place-items: center; }
+  .frame { position: relative; width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; background: #000; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; display: block; background: #000;
+          opacity: 0; transition: opacity 1.2s ease; }
+  .playing video { opacity: 1; }
+  button { position: absolute; left: 50%; top: 50%; width: 84px; height: 84px; margin: -42px 0 0 -42px;
+           border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.38); background: transparent;
+           cursor: pointer; padding: 0; opacity: 0.8; transition: opacity 0.6s ease, border-color 0.3s ease;
+           -webkit-tap-highlight-color: transparent; }
+  button:hover, button:focus-visible { border-color: rgba(255, 255, 255, 0.8); opacity: 1; outline: none; }
+  button svg { width: 26px; height: 26px; margin-left: 5px; fill: rgba(255, 255, 255, 0.82); }
+  .playing button { opacity: 0; pointer-events: none; }
+  .playing { cursor: none; }
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <video id="film" src="film.mp4" preload="metadata" playsinline></video>
+  <button id="play" aria-label="Play Tiny Rocket">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17l15-8.5z"/></svg>
+  </button>
+</div>
+<script>
+  const frame = document.getElementById('frame');
+  const film = document.getElementById('film');
+  const play = document.getElementById('play');
+  play.addEventListener('click', () => {
+    film.currentTime = 0;
+    film.play().then(() => frame.classList.add('playing')).catch(() => {});
+  });
+  film.addEventListener('click', () => { if (film.paused) film.play(); else film.pause(); });
+  film.addEventListener('ended', () => frame.classList.remove('playing'));
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); if (frame.classList.contains('playing')) { film.paused ? film.play() : film.pause(); } else play.click(); }
+  });
+</script>
+</body>
+</html>

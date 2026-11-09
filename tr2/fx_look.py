@@ -25,7 +25,7 @@ def paper_bg():
     return pic
 
 
-def rocket_sheet(path=None, tod="dusk"):
+def rocket_sheet(path=None, tod="morning"):
     pic = paper_bg()
     cel = core.Cel()
     info = rocket.draw(cel, 470, 1010, s=1.8, tod=tod, drawing=0, view="side", state=rocket.State())
