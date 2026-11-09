@@ -8,20 +8,22 @@ from . import common
 NAME = "s2_hill"
 
 
-SKY_TILT = 900.0    # how far the camera tilts up to rest on the sky; shot 3 starts from the same view
+SKY_TILT = 1560.0   # how far the camera tilts up to rest on the sky; shot 3 starts from the same view
+ZOOM_END = 1.5
+END_CX, END_CY = 1262.0, 962.0   # where this camera rests (shot 3 picks up from here)
 
 
 def camera(t, n_t=8.0):
     """Lateral dolly across the hill, then (as the panda looks up) a tilt up to
     the first stars. The dissolve to night happens on the sky; shot 3 calls
     this same function for its first frames so the two views match exactly."""
-    u = core.ease_io(core.span(t, 0.0, 7.2), 1.7)
     v = core.ease_io(core.span(t, 6.75, 8.55), 2.0)
     dx, dy = common.drift(t, 2.0, 2)
-    cx = core.lerp(1470.0, 1705.0, u)
-    cy = core.lerp(905.0, 925.0, u) - 40.0 * v
-    return core.Camera(cx0=1600, cy0=900, cx=cx + dx, cy=cy + dy, zoom=1.12, dolly=core.lerp(1.05, 1.0, u),
-                       tilt=SKY_TILT * v)
+    # wide establishing dolly, then push in for the proud beat, follow to the map, tilt up through the leaves
+    cx = core.keys(t, [(0.0, 1400.0), (2.3, 1500.0, core.ease_out), (3.5, 1575.0), (4.35, 1575.0), (5.9, END_CX)], core.ease_io)
+    cy = core.keys(t, [(0.0, 880.0), (2.3, 890.0), (3.5, 962.0), (8.6, END_CY)], core.ease_io)
+    zoom = core.keys(t, [(0.0, 1.25), (2.2, 1.32), (3.5, 2.05), (6.75, 2.05), (8.55, ZOOM_END)], core.ease_io)
+    return core.Camera(cx0=1600, cy0=900, cx=cx + dx, cy=cy + dy, zoom=zoom, tilt=SKY_TILT * v)
 
 
 def render(fl, n, f):

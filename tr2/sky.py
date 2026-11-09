@@ -50,7 +50,7 @@ def _v_of(SY):
     lo = 1.0 - 0.9 * (540.0 - SY) / 540.0
     hi = 0.1 * np.exp(np.minimum(SY, 0) / 900.0)
     v = np.where(SY >= 0, lo, hi)
-    deep = 1.0 - 0.38 * (1 - np.exp(np.minimum(SY, 0) / 1300.0))
+    deep = 1.0 - 0.22 * (1 - np.exp(np.minimum(SY, 0) / 1300.0))
     return np.clip(v, 0, 1), deep
 
 
@@ -233,7 +233,7 @@ def _stars(cam, t, amount, turn):
     keep = (X > -8) & (X < W + 8) & (Y > -8) & (Y < H + 8) & (b > thr)
     X, Y, b, cc, ph, fr = X[keep], Y[keep], b[keep], c[keep, 3:6], c[keep, 6], c[keep, 7]
     tw = 1.0 + (0.10 + 0.28 * b) * np.sin(t * fr + ph) * np.sin(t * fr * 0.37 + ph * 1.7)
-    amp = (0.13 + 0.22 * np.abs(np.sin(ph * 7.0)) + 1.2 * b ** 0.8) * tw * min(1.0, amount * 1.5)
+    amp = (0.13 + 0.22 * np.abs(np.sin(ph * 7.0)) + 1.2 * b ** 0.8) * tw * min(1.0, 0.35 + amount * 1.5)
     rad = (0.55 + 1.55 * b ** 1.4) * max(0.8, s ** 0.5)
     _splat(out, X.astype(np.float64), Y.astype(np.float64), rad.astype(np.float64),
            np.ascontiguousarray(cc, np.float64), amp.astype(np.float64))
@@ -265,10 +265,10 @@ LOOKS = {
         dict(kinds=("wisp",), n=8, y=(-2700, -300), sc=(0.8, 1.4), v=7.0, haze=0.2, op=0.4, tg=1.1, pp=0.04),
     ],
     "dawn": [
-        dict(kinds=("bar", "wisp", "bar"), n=9, y=(350, 475), sc=(0.28, 0.5), v=2.2, haze=0.42, op=0.95, tg=1.0, pp=0.02),
-        dict(kinds=("wisp", "bar", "cumulus"), n=5, y=(120, 330), sc=(0.5, 0.85), v=5.5, haze=0.2, op=0.9, tg=1.06, pp=0.035),
-        dict(kinds=("cumulus",), n=2, y=(-120, 90), sc=(0.9, 1.2), v=10.0, haze=0.05, op=1.0, tg=1.15, pp=0.06),
-        dict(kinds=("wisp", "cumulus", "wisp", "bar", "wisp", "tower"), n=20, y=(-2750, -380), sc=(0.7, 1.3), v=8.0, haze=0.1, op=0.95, tg=1.1, pp=0.04),
+        dict(kinds=("band", "wisp", "band"), n=12, y=(380, 520), sc=(0.26, 0.5), v=2.0, haze=0.40, op=0.95, tg=1.0, pp=0.02, tint=(1.0, 0.84, 0.84)),
+        dict(kinds=("wisp", "band", "bar"), n=6, y=(150, 360), sc=(0.5, 0.85), v=5.0, haze=0.2, op=0.85, tg=1.06, pp=0.035, tint=(1.0, 0.88, 0.89)),
+        dict(kinds=("cumulus",), n=2, y=(-60, 110), sc=(0.6, 0.85), v=10.0, haze=0.05, op=1.0, tg=1.15, pp=0.06, tint=(1.0, 0.92, 0.93)),
+        dict(kinds=("wisp", "wisp", "cumulus", "wisp", "bar"), n=22, y=(-2750, -330), sc=(0.7, 1.35), v=8.0, haze=0.12, op=0.8, tg=1.1, pp=0.04, tint=(1.0, 0.84, 0.88)),
     ],
     "morning": [
         dict(kinds=("cumulus", "bar"), n=10, y=(350, 470), sc=(0.22, 0.4), v=2.5, haze=0.5, op=0.95, tg=1.0, pp=0.02),

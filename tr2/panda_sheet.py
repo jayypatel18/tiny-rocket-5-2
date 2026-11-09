@@ -68,15 +68,16 @@ def closeup(path, tod="dusk", drawing=0):
     n = core.fbm(core.H, core.W, 500, 4, seed=3) - 0.5
     bg += n[..., None] * 0.06
     s = 7.2
-    x, y = 900.0, 1322.0
-    pose = panda.POSES["tie_knot"]
+    x, y = 1080.0, 1340.0
+    pose = panda.mirror(panda.POSES["tie_knot"])       # shot 1 layout: facing screen left, into the low sun
     cel = core.Cel()
     ink = palette.TOD[tod]["ink"]
-    # the bamboo strut the knot goes on (behind the paws)
+    # the bamboo strut the knot goes on (behind the paws): a diagonal from the lower left
     bam = palette.lit(palette.ROCKET["bamboo"], tod)
-    a = np.array([x + 49 * s, y - 0 * s])
-    b = np.array([x + 57 * s, y - 175 * s])
-    d = (b - a) / np.hypot(*(b - a))
+    knot = np.array([x - 52.6 * s, y - 80 * s])
+    d = np.array([0.30, -1.0]) / np.hypot(0.30, 1.0)
+    a = knot - d * 100 * s
+    b = knot + d * 95 * s
     nrm = np.array([-d[1], d[0]]) * 4.6 * s
     pole = np.array([a + nrm, b + nrm, b - nrm, a - nrm])
     cel.fill(pole, bam)
@@ -88,17 +89,16 @@ def closeup(path, tod="dusk", drawing=0):
         cel.stroke(np.array([c + nrm, c + d * 5 - nrm * 0.0, c - nrm]), 3.2, ink, seed=3)
     # string lashing round the strut
     strc = palette.lit(palette.ROCKET["string"], tod)
-    knot = np.array([x + 52.6 * s, y - 80 * s])
     for j in range(5):
         c = knot + d * (j - 2) * 2.3 * s
         cel.stroke(np.array([c + nrm * 1.08 + d * 3, c - nrm * 1.08 - d * 3]), 0.22 * s * 6.5, ink)
         cel.stroke(np.array([c + nrm * 1.05 + d * 3, c - nrm * 1.05 - d * 3]), 0.15 * s * 6.5, strc)
     an = panda.draw(cel, pose, x, y, s, tod, drawing=drawing)
     # the string: from the knot up to the teeth, and the short end in the pulling paw
-    m = an["mouth_r"]
-    pl = an["paw_l"]
+    m = an["mouth_l"]
+    pl = an["paw_r"]
     for pts in (np.array([knot, knot + (m - knot) * 0.5 + np.array([0.5, 1.0]), m]),
-                np.array([knot, pl + np.array([2.0, -3.0]) * s, pl + np.array([-9.0, 3.0]) * s])):
+                np.array([knot, pl + np.array([-2.0, -3.0]) * s, pl + np.array([9.0, 3.0]) * s])):
         cel.stroke(pts, 7.5, ink, taper=(0.0, 0.0))
         cel.stroke(pts, 4.6, strc, taper=(0.0, 0.0))
     core.over(bg, cel.rgba())

@@ -29,12 +29,26 @@ _river = interpolate.PchipInterpolator([p[1] for p in RIVER], [p[0] for p in RIV
 
 # Per time of day: how much direct (shadow casting) light there is, and how much
 # colour the eye still sees. Night and the blue hour are flatter and cooler.
-LOOK = dict(dusk=(1.0, 1.0), night=(0.55, 0.50), predawn=(0.30, 0.60), launch=(0.42, 0.70),
+LOOK = dict(dusk=(1.0, 1.0), night=(0.30, 0.42), predawn=(0.25, 0.46), launch=(0.36, 0.56),
             sunrise=(1.0, 1.0), morning=(1.0, 1.0))
+# value gain on vegetation, and (tint, strength) of the rim light on crest and foliage tops
+GAIN = dict(night=0.80, predawn=0.84, launch=0.88)
+RIM = dict(dusk=((1.0, 0.98, 0.60), 1.0), night=((0.86, 0.94, 1.0), 0.50), predawn=((1.0, 1.05, 1.40), 0.50),
+           launch=((1.0, 1.0, 1.15), 0.60), morning=((1.0, 0.98, 0.70), 1.0), sunrise=((1.0, 0.98, 0.62), 1.0))
 
 
 def look(tod):
     return LOOK.get(tod, (1.0, 1.0)) if isinstance(tod, str) else (1.0, 1.0)
+
+
+def gain(tod):
+    return GAIN.get(tod, 1.0) if isinstance(tod, str) else 1.0
+
+
+def rim_col(tod, T):
+    """Colour of the thin rim light (crest grass, foliage tops, blade edges)."""
+    tint, k = RIM.get(tod, ((1.0, 0.98, 0.7), 1.0)) if isinstance(tod, str) else ((1.0, 0.98, 0.7), 1.0)
+    return np.clip(np.asarray(T["rim"], np.float32) * np.float32(tint) * k, 0, 1)
 
 
 def desat(c, s):
@@ -247,10 +261,11 @@ def _village(tod, x0, y0, k, river_cov):
     for q in houses:
         hx, hy, wd = q["x"], q["y"], q["wd"]
         dn = np.clip((hy - 930) / 160.0, 0, 1)
-        hz = T["fog_k"] * (0.50 - 0.34 * dn)
+        hz = T["fog_k"] * (0.34 - 0.24 * dn)
 
         def C(local, lightness):
-            col = mixc(palette.shade(local, T), np.clip(np.asarray(local, np.float32) * key, 0, 1), np.float32(lightness))
+            col = mixc(palette.shade(local, T), desat(np.clip(np.asarray(local, np.float32) * key, 0, 1), 0.5 + 0.5 * look(tod)[1]),
+                       np.float32(lightness * (0.30 + 0.70 * look(tod)[0]))) * (0.5 + 0.5 * gain(tod))
             return mixc(col, fog, np.float32(hz))
 
         bx, by = L(hx, hy)
@@ -422,27 +437,30 @@ def paint_valley(tod):
     ref = np.ascontiguousarray(col, np.float32)
     # haze with distance
     mean = np.float32((0.50, 0.60, 0.32)) * (0.45 * key + 0.5 * amb)
-    ref = mixc(ref, mean, smoothstep(0.30, 0.02, d) * 0.6)      # far fields simplify
-    ref *= 0.88
-    hz = T["fog_k"] * (0.10 + 0.66 * np.clip(1 - d / 0.55, 0, 1) ** 1.6)
+    ref = mixc(ref, mean, smoothstep(0.26, 0.02, d) * 0.32)      # far fields simplify
+    ref *= 0.86 * gain(tod)
+    hz = T["fog_k"] * (0.05 + 0.50 * np.clip(1 - d / 0.50, 0, 1) ** 2.0)
     ref = mixc(ref, fog, hz)
     # river: a ribbon of sky
     rc, rhw, rdist = river_field()
     sky_far = np.clip(palette.sky_color(T, 1.0) * 1.03, 0, 1)
-    sky_near = np.clip(palette.sky_color(T, 0.2) * 1.30 + 0.02, 0, 1)
-    sky = mixc(np.broadcast_to(sky_far, (h, w, 3)), sky_near, smoothstep(0.08, 0.55, d))
+    sky_mid = np.clip(palette.sky_color(T, 0.86) * 1.06, 0, 1)
+    sky_near = np.clip(0.5 * palette.sky_color(T, 0.2) * 1.30 + 0.5 * palette.sky_color(T, 0.9) + 0.02, 0, 1)
+    sky = mixc(np.broadcast_to(sky_far, (h, w, 3)), sky_mid, smoothstep(0.04, 0.20, d))
+    sky = mixc(sky, sky_near, smoothstep(0.30, 0.62, d))
     rip = core.fbm(h, w, 5 * k, 3, seed=43, aspect=9.0)
     rip2 = core.fbm(h, w, 24 * k, 3, seed=48, aspect=7.0)
     rcol = sky * (0.93 + 0.20 * (rip - 0.5) + 0.20 * (rip2 - 0.5))[..., None]
-    rcol = mixc(rcol, np.clip(T["rim"] * 1.02 + 0.05, 0, 1), smoothstep(0.60, 0.70, rip) * 0.45 * smoothstep(0.6, 0.1, d))
+    rcol = mixc(rcol, np.clip(T["rim"] * 1.02 + 0.05, 0, 1), smoothstep(0.56, 0.68, rip) * 0.65 * smoothstep(0.75, 0.1, d))
+    rcol = rcol * (1.0 if look(tod)[0] >= 1 else 1.30)
     inner = smoothstep(rhw * 0.35, rhw, rdist) * smoothstep(0.38, 0.62, rip2 + 0.25 * (rip - 0.5) + 0.12)
     rcol = np.clip(mixc(rcol, mixc(palette.shade((0.24, 0.36, 0.36), T), fog, hz * 0.6), inner * 0.6), 0, 1)
-    bank = smoothstep(rhw + 7 * k * ps + 2, rhw, rdist) * (1 - rc)
-    ref = mixc(ref, mixc(palette.shade((0.20, 0.30, 0.30), T), fog, hz * 0.8), bank * 0.75)
+    bank = smoothstep(rhw + 11 * k * ps + 3, rhw, rdist) * (1 - rc)
+    ref = mixc(ref, mixc(palette.shade((0.18, 0.28, 0.28), T), fog, hz * 0.6), bank * 0.88)
     ref = mixc(ref, rcol, rc)
     # tree clumps
     r = core.rng("valleytrees", 3)
-    n = 230
+    n = 380
     ty = HORIZON + 14 + 600 * r.random(n) ** 1.9
     tx = r.uniform(x0, x1, n)
     near_river = r.random(n) < 0.45
@@ -456,23 +474,26 @@ def paint_valley(tod):
             continue
         rx = (26 + 60 * r.random()) * pp * k
         ry_ = rx * r.uniform(0.55, 0.9)
-        hzz = float(T["fog_k"] * (0.10 + 0.66 * max(0.0, 1 - dd / 0.55) ** 1.6)) * 0.85
-        cl = mixc(np.clip(np.float32((0.40, 0.50, 0.24)) * key, 0, 1), fog, np.float32(hzz))
-        cs = mixc(palette.shade((0.16, 0.30, 0.32), T), fog, np.float32(hzz))
+        hzz = float(T["fog_k"] * (0.05 + 0.50 * max(0.0, 1 - dd / 0.50) ** 2.0)) * 0.85
+        cs0 = palette.shade((0.16, 0.30, 0.32), T) * gain(tod)
+        cl0 = cs0 + (desat(np.clip(np.float32((0.40, 0.50, 0.24)) * key, 0, 1), look(tod)[1]) * gain(tod) - cs0) * look(tod)[0]
+        cl = mixc(cl0, fog, np.float32(hzz))
+        cs = mixc(cs0, fog, np.float32(hzz))
         # cast shadow on the ground, away from the sun
-        _blob(ref, None, jx - sx * rx * 1.5, jy + ry_ * 0.25, rx * 1.9, ry_ * 0.35, cs, cs, sx, sy, i, bump=0.1, a_max=0.4)
+        _blob(ref, None, jx - sx * rx * 2.5, jy + ry_ * 0.25, rx * 3.1, ry_ * 0.32, cs, cs, sx, sy, i, bump=0.1, a_max=0.52 * (0.3 + 0.7 * look(tod)[0]))
         for q in range(int(r.integers(1, 4))):
             _blob(ref, None, jx + r.normal(0, rx * 0.5), jy - ry_ * (0.6 + 0.3 * q) + r.normal(0, ry_ * 0.2), rx * r.uniform(0.6, 1.0), ry_ * r.uniform(0.7, 1.0), cl, cs, sx, sy, i * 7 + q)
     # mist pooled low and far
-    mist = smoothstep(0.42, 0.75, core.fbm(h, w, 300 * k, 4, seed=44, aspect=5.0)) * smoothstep(0.42, 0.04, d) * 0.62
+    mist = smoothstep(0.50, 0.74, core.fbm(h, w, 150 * k, 4, seed=44, aspect=9.0)) * smoothstep(0.40, 0.05, d) * 0.50
+    mist = np.maximum(mist, np.exp(-rdist / (rhw * 2.5 + 30 * k)) * smoothstep(0.46, 0.66, core.fbm(h, w, 110 * k, 3, seed=51, aspect=5.0)) * smoothstep(0.5, 0.1, d) * 0.42)
     mcol = np.clip(fog * 1.04 + 0.02, 0, 1)
     ref = mixc(ref, mcol, mist)
     mn = core.fbm(h, w, 240 * k, 4, seed=49, aspect=6.0)
-    ref = mixc(ref, fog, smoothstep(0.15, 0.0, d + 0.10 * (mn - 0.5)) ** 1.5 * 0.80)   # the far edge dissolves
+    ref = mixc(ref, fog, smoothstep(0.085, 0.0, d + 0.05 * (mn - 0.5)) * 0.85)   # the far edge dissolves
     # the village
     vil, (vx, vy), windows = _village(tod, x0, y0, k, rc)
     core.over(ref, vil, vx, vy)
-    veil = smoothstep(0.5, 0.85, core.fbm(h, w, 220 * k, 3, seed=45, aspect=6.0)) * smoothstep(0.5, 0.08, d) * 0.22
+    veil = smoothstep(0.5, 0.85, core.fbm(h, w, 220 * k, 3, seed=45, aspect=6.0)) * smoothstep(0.5, 0.08, d) * 0.10
     ref = mixc(ref, mcol, veil)
     edge_n = core.fbm(h, w, 70 * k, 3, seed=46, aspect=4.0)
     edge_n = 0.6 * edge_n + 0.4 * core.fbm(h, w, 320 * k, 3, seed=50, aspect=5.0)
@@ -530,9 +551,9 @@ def hill_light(tod, X, Y, t):
     ru = (X - rx) * dirx / 640.0
     rv = (Y - (ry + 8 + 150 * np.clip(ru, 0, 1.3))) / (13 + 26 * np.clip(ru, 0, 1))
     rs = np.exp(-rv * rv * 1.2) * smoothstep(-0.02, 0.03, ru) * smoothstep(1.05, 0.75, ru)
-    sh = np.maximum(sh, rs * 0.9)
     l = l * (1 - 0.88 * sh)
-    return l.astype(np.float32), n1, n2
+    # the rocket shadow is returned apart (the rocket is not always there)
+    return l.astype(np.float32), n1, n2, (rs * 0.9 * l).astype(np.float32)
 
 
 def paint_hill(tod):
@@ -547,9 +568,10 @@ def paint_hill(tod):
     tuft = 7 * core.fbm_at(xs, xs * 0 + 2.2, 9, 3, 61) + 6 * core.fbm_at(xs, xs * 0 + 5.2, 36, 2, 62) - 4
     t = Y - gy[None, :]
     alpha = np.clip((t + tuft[None, :].astype(np.float32)) * k / 1.5 + 0.5, 0, 1).astype(np.float32)
-    l, n1, n2 = hill_light(tod, X, Y, t)
+    l0, n1, n2, rshadow = hill_light(tod, X, Y, t)
     direct, sat = look(tod)
-    l = l * direct
+    l = l0 * direct
+    rshadow = rshadow * direct * alpha
     n3 = core.fbm(h, w, 130 * k, 4, seed=63, aspect=1.8)
     n4 = core.fbm(h, w, 22 * k, 3, seed=64, aspect=0.6)
     g1 = np.float32((0.50, 0.64, 0.22))
@@ -583,10 +605,11 @@ def paint_hill(tod):
     pm = smoothstep(0.25, 0.8, pm * (0.55 + 0.9 * core.fbm(h, w, 26 * k, 3, seed=65, aspect=2.5)))
     earth = np.float32((0.70, 0.62, 0.44))
     pcol = mixc(palette.shade(earth * (0.8, 0.9, 1.15), T), np.clip(earth * key, 0, 1), l)
-    col = mixc(col, pcol, pm * 0.62)
-    # sunlit grass tips along the crest
-    rimv = np.exp(-np.maximum(t, 0) / 11.0) * l * (0.4 + 0.6 * smoothstep(0.35, 0.65, core.fbm(h, w, 12 * k, 2, seed=66, aspect=0.5)))
-    col = mixc(col, np.clip(T["rim"] * np.float32((1.0, 0.98, 0.62)) + 0.02, 0, 1), np.clip(rimv * 0.85, 0, 1))
+    col = mixc(col, pcol, pm * 0.62) * gain(tod)
+    # sun (or moon) lit grass tips along the crest
+    rim_w = smoothstep(1000, 1800, X) if tod in ("predawn", "launch") else 1.0
+    rimv = np.exp(-np.maximum(t, 0) / 11.0) * l0 * rim_w * (0.4 + 0.6 * smoothstep(0.35, 0.65, core.fbm(h, w, 12 * k, 2, seed=66, aspect=0.5)))
+    col = mixc(col, rim_col(tod, T), np.clip(rimv * 0.85, 0, 1))
     ref = np.ascontiguousarray(np.clip(col, 0, 1), np.float32)
     # stones
     r = core.rng("stones", 2)
@@ -633,12 +656,16 @@ def paint_hill(tod):
     cxs = r.uniform(x0, x1, m)
     cys = ground_y(cxs) + r.uniform(-2, 9, m)
     jx, jy = (cxs - x0) * k, (cys - y0) * k
-    lc = l[np.clip(jy.astype(int) + 4, 0, h - 1), np.clip(jx.astype(int), 0, w - 1)]
-    dark = palette.shade((0.22, 0.42, 0.34), T)
-    midg = desat(np.clip(np.float32((0.52, 0.64, 0.24)) * key, 0, 1), sat)
+    lc = l0[np.clip(jy.astype(int) + 4, 0, h - 1), np.clip(jx.astype(int), 0, w - 1)]
+    dark = palette.shade((0.22, 0.42, 0.34), T) * gain(tod)
+    midg = desat(np.clip(np.float32((0.52, 0.64, 0.24)) * key, 0, 1), sat) * gain(tod)
     midg = dark + (midg - dark) * (0.35 + 0.65 * direct)
-    gold = midg + (np.clip(T["rim"] * np.float32((1.0, 0.98, 0.60)), 0, 1) - midg) * direct
-    cols = np.where((lc > 0.45 * direct)[:, None], mixc(midg, gold, r.random(m) ** 0.7), mixc(dark, dark * 1.5 + 0.03, r.random(m)))
+    if direct < 1.0:
+        midg = midg * np.float32((0.80, 1.0, 1.20))
+    gold = midg + (rim_col(tod, T) - midg) * (0.55 + 0.45 * direct)
+    if tod in ("predawn", "launch"):
+        lc = lc * smoothstep(1000, 1800, cxs)
+    cols = np.where((lc > 0.45)[:, None], mixc(midg, gold, r.random(m) ** 0.7), mixc(dark, dark * 1.5 + 0.03, r.random(m)))
     paint.strokes(out, jx, jy, -np.pi / 2 + r.normal(0, 0.38, m) + 0.2 * np.sign(cxs - 1500) * 0.5, 2.0 + 2.2 * r.random(m),
                   (12 + 28 * r.random(m) ** 1.5) * k * 0.8, np.clip(cols, 0, 1), op=0.95, bend=r.normal(0, 0.6, m),
                   seed=72, dry=0.2, taper=0.9, streak=0.04, paper_k=0.1)
@@ -669,7 +696,7 @@ def paint_hill(tod):
     fx, fy, fw = np.array(fx), np.array(fy), np.array(fw)
     paint.strokes(out, fx, fy, r.uniform(0, 6.28, len(fx)), fw, fw * 0.8, np.clip(np.array(fcol), 0, 1), op=0.96,
                   seed=73, dry=0.0, taper=0.0, streak=0.0, paper_k=0.0)
-    return out
+    return out, rshadow
 
 
 # ----------------------------------------------------------------------- tree
@@ -743,7 +770,7 @@ def paint_tree(tod):
     bark_f = core.fbm(h, w, 9 * k, 3, seed=84, aspect=0.3)
     lt = smoothstep(0.002, 0.012, side + 0.012 * (bark_n - 0.5))
     under = smoothstep(900, 640, Y)          # shaded under the canopy
-    lt = lt * (1 - 0.7 * under)
+    lt = lt * (1 - 0.7 * under) * (0.2 + 0.8 * look(tod)[0])
     bark = np.float32((0.50, 0.36, 0.28)) * (0.78 + 0.44 * bark_n)[..., None]
     bark = mixc(bark, np.float32((0.40, 0.46, 0.26)), smoothstep(0.62, 0.8, core.fbm(h, w, 70 * k, 3, seed=85)) * 0.5)
     b_sh = mixc(bark * np.float32((0.70, 0.74, 1.10)) * amb * 0.80, palette.shade((0.24, 0.20, 0.36), T), 0.35 + 0.3 * under)
@@ -752,7 +779,7 @@ def paint_tree(tod):
     tref = tref * (0.86 + 0.28 * bark_f)[..., None]
     # bounce light on the shadow edge (cool sky)
     back = smoothstep(0.004, 0.014, -side) * (1 - under) * 0.35
-    tref = mixc(tref, np.clip(palette.sky_color(T, 0.25) * 0.75, 0, 1), back)
+    tref = mixc(tref, np.clip(palette.sky_color(T, 0.25) * 0.75, 0, 1), back) * gain(tod)
     tdir = paint.flow_from(np.repeat(soft[..., None], 3, 2), 4.0)
     trunk = paint.paint(np.clip(tref, 0, 1), tm, direction=tdir, seed=paint_seed("trunk", tod), passes=paint.FINE, scale=1.0, spill=0.0, grain=0.05)
     # bark strokes: dark furrows and a lit edge
@@ -772,20 +799,33 @@ def paint_tree(tod):
     Lz = 0.42
     ln = math.sqrt(sx * sx + sy * sy + Lz * Lz)
     lx, ly, lz = sx / ln, sy / ln, Lz / ln
-    leaf_l = np.float32((0.52, 0.62, 0.22))
-    leaf_m = np.float32((0.32, 0.50, 0.22))
-    leaf_d = np.float32((0.20, 0.36, 0.36))
+    leaf_l = np.float32((0.45, 0.63, 0.23))
+    leaf_m = np.float32((0.34, 0.54, 0.24))
+    leaf_d = np.float32((0.22, 0.42, 0.34))
     c_hi = np.clip(leaf_l * key * 1.16 + np.float32((0.06, 0.05, 0.0)), 0, 1)
     c_li = np.clip(leaf_l * key, 0, 1)
     c_mid = np.clip(leaf_m * (0.55 * key + 0.5 * amb), 0, 1)
-    c_dk = palette.shade(leaf_d, T) * 0.92
-    c_deep = palette.shade((0.15, 0.22, 0.36), T) * 0.80
+    c_dk = palette.shade(leaf_d, T)
+    c_deep = palette.shade((0.15, 0.24, 0.36), T) * 0.86
     direct, sat = look(tod)
-    c_mid = desat(c_dk + (c_mid - c_dk) * (0.45 + 0.55 * direct), sat)
-    c_li = desat(c_mid + (c_li - c_mid) * direct, sat)
-    c_hi = desat(c_mid + (c_hi - c_mid) * direct, sat)
+    gn = gain(tod)
+    c_dk, c_deep = c_dk * gn, c_deep * gn
+    c_mid = desat(c_dk + (c_mid * gn - c_dk) * (0.45 + 0.55 * direct), sat)
+    c_li = desat(c_mid + (c_li * gn - c_mid) * direct, sat)
+    c_hi = desat(c_mid + (c_hi * gn - c_mid) * direct, sat)
+    hi_a, hi_b, hi_dab = 0.70, 0.82, 0.44
+    if direct < 1.0:   # night and the blue hour: cooler, and only a thin rim on the tops of the clumps
+        cool = np.float32((0.80, 1.0, 1.20))
+        c_mid, c_li = c_mid * cool, c_li * cool
+        c_hi = c_li + (rim_col(tod, T) - c_li) * 0.45
+        hi_a, hi_b, hi_dab = 0.90, 0.97, 0.92
     layers = []
+    # how much each point would catch a fire burning low on the right (launch)
+    fmap = np.zeros((h, w), np.float32)
+    tfire = smoothstep(0.002, 0.012, -(gx * 0.6 + gyy * 0.75)) * (0.35 + 0.65 * smoothstep(640, 900, Y))
     for z in (0, 1, 2):
+        if z == 1:
+            fmap = fmap * (1 - tm) + tfire * tm
         Hf = np.zeros((h, w), np.float32)
         al = np.zeros((h, w), np.float32)
         for mi, (mx, my, mr, mz) in enumerate(MASSES):
@@ -822,22 +862,26 @@ def paint_tree(tod):
         depth = Hf / (np.maximum(core.gblur(Hf, 40 * k), 1.0) + 40.0)
         hole = smoothstep(0.47, 0.41, holes + 0.22 * np.clip(Hf / (90.0 * k), 0, 1)) if z > 0 else smoothstep(0.44, 0.38, holes)
         al = al * (1 - hole)
-        Hs = core.gblur(Hf + 30.0 * k * (leafn - 0.5) + 5.0 * k * (leaff - 0.5), 3.0 * k)
+        Hs = core.gblur(Hf + 20.0 * k * (leafn - 0.5) + 4.0 * k * (leaff - 0.5), 3.0 * k)
         nx = -np.gradient(Hs, axis=1)
         ny = -np.gradient(Hs, axis=0)
         nz = 1.0
         nn = np.sqrt(nx * nx + ny * ny + nz * nz)
         lam = (nx * lx + ny * ly + nz * lz) / nn
         lam = lam + 0.10 * (leaff - 0.5)
+        # undersides: canopy with open air just below it
+        below_al = core.gblur(np.roll(al, -int(34 * k), axis=0), 12 * k)
+        und = np.clip(1.0 - below_al, 0, 1) ** 1.5 * (0.55 + 0.9 * leaff)
+        fmap = fmap * (1 - al) + np.clip(und, 0, 1) * (0.5 if z == 0 else 1.0) * al
         # occlusion: undersides and the interior away from the sun
         occ = core.gblur(al, 34 * k)
         occ_dir = np.clip(core.gblur(np.roll(np.roll(al, int(-sx * 40 * k), 1), int(-sy * 40 * k), 0), 22 * k), 0, 1)
         lam = lam - 0.35 * occ_dir * occ + 0.12
         lam = lam - (0.36, 0.10, 0.0)[z]
-        t_hi = smoothstep(0.66, 0.78, lam)
-        t_li = smoothstep(0.38, 0.50, lam)
-        t_mid = smoothstep(0.02, 0.16, lam)
-        t_dk = smoothstep(-0.30, -0.14, lam)
+        t_hi = smoothstep(hi_a, hi_b, lam)
+        t_li = smoothstep(0.44, 0.58, lam)
+        t_mid = smoothstep(-0.10, 0.12, lam)
+        t_dk = smoothstep(-0.46, -0.26, lam)
         col = mixc(c_deep, c_dk, t_dk)
         col = mixc(col, c_mid, t_mid)
         col = mixc(col, c_li, t_li)
@@ -860,7 +904,7 @@ def paint_tree(tod):
             lam_p = lam[ys_[pick], xs_[pick]]
             occ_p = occ[ys_[pick], xs_[pick]]
             u_ = r.random(nd)
-            colp = np.where((lam_p > 0.44)[:, None], mixc(c_li, c_hi, u_),
+            colp = np.where((lam_p > hi_dab)[:, None], mixc(c_li, c_hi, u_),
                             np.where((lam_p > 0.15)[:, None], mixc(c_mid, c_li, u_ * 0.55), mixc(c_deep, c_dk * 1.25, u_)))
             if z == 0:
                 colp = mixc(colp, np.broadcast_to(c_dk, colp.shape), np.full(nd, 0.5, np.float32))
@@ -870,4 +914,4 @@ def paint_tree(tod):
                           (4.0 + 3.5 * r.random(keepd.sum())) * k * 0.8, (4.5 + 5.5 * r.random(keepd.sum())) * k * 0.8, np.clip(colp[keepd], 0, 1),
                           op=0.90, bend=r.normal(0, 0.4, keepd.sum()), seed=97 + z, dry=0.1, taper=0.25, streak=0.06, paper_k=0.25)
         layers.append(fo)
-    return [layers[0], trunk, layers[1], layers[2]]
+    return [layers[0], trunk, layers[1], layers[2]], fmap.astype(np.float32)

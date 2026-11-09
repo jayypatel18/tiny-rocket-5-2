@@ -2,6 +2,8 @@
 
     python3 ROOT/tr2/fx_look.py sheet     rocket-sheet.png (side and low three quarter on paper)
     python3 ROOT/tr2/fx_look.py launch    launch-look.png (one lit frame, 0.6 s after ignition)
+    python3 ROOT/tr2/fx_look.py cockpit   cockpit-look.png, cockpit-warm.png, cockpit-inside.png
+                                          (with a flat stand in for the panda)
 """
 import os
 import sys
@@ -40,6 +42,46 @@ def rocket_sheet(path=None, tod="morning"):
     return pic
 
 
+def _stand_in(cx, cy, r, tod):
+    """A flat russet head and shoulders so the cockpit layers can be judged before the panda exists."""
+    cel = core.Cel(ss=2)
+    fur = palette.lit(palette.PANDA["fur"], tod)
+    wh = palette.lit(palette.PANDA["white"], tod)
+    cel.fill(core.ellipse(cx, cy + r * 0.95, r * 0.8, r * 0.5, 40), palette.shade(palette.PANDA["dark"], tod))
+    cel.fill(core.ellipse(cx, cy + r * 0.1, r * 0.62, r * 0.52, 50), fur)
+    cel.fill(core.ellipse(cx, cy + r * 0.22, r * 0.44, r * 0.3, 40), wh)
+    for sg in (-1, 1):
+        cel.fill(core.ellipse(cx + sg * r * 0.5, cy - r * 0.36, r * 0.2, r * 0.24, 30), wh)
+        cel.fill(core.ellipse(cx + sg * r * 0.24, cy + r * 0.05, r * 0.07, r * 0.09, 20), palette.PANDA["eye"])
+    return cel.rgba()
+
+
+def cockpit_look():
+    t0 = time.time()
+    for name, tod, light, reflect, fog in (("cockpit-look.png", "predawn", 0.0, 0.0, 0.0),
+                                           ("cockpit-warm.png", "predawn", 0.8, 0.35, 0.7)):
+        pic = np.zeros((core.H, core.W, 3), np.float32)
+        cx, cy, r = 960, 560, 380
+        back = core.Cel()
+        rocket.draw_cockpit_back(back, tod, 0, cx, cy, r, light=light)
+        core.over(pic, back.rgba())
+        core.over(pic, _stand_in(cx, cy, r, tod) * rocket.cockpit_mask(cx, cy, r)[..., None])
+        front = core.Cel()
+        rocket.draw_cockpit_front(front, tod, 0, cx, cy, r, reflect=reflect, light=light, fog=fog)
+        core.over(pic, front.rgba())
+        core.save(os.path.join(REVIEW, name), pic)
+        print(name, "%.1f s" % (time.time() - t0))
+    tod = "sunrise"
+    yy = np.linspace(0.35, 1.0, core.H, dtype=np.float32)[:, None].repeat(core.W, 1)
+    pic = palette.sky_color(tod, yy).astype(np.float32)
+    cel = core.Cel()
+    rocket.draw_cockpit_inside(cel, tod, 0, window=(1240, 430, 250), light=0.7)
+    core.over(pic, cel.rgba())
+    core.over(pic, _stand_in(760, 640, 420, tod))
+    core.save(os.path.join(REVIEW, "cockpit-inside.png"), pic)
+    print("cockpit-inside.png %.1f s" % (time.time() - t0))
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "sheet"
     t0 = time.time()
@@ -48,4 +90,6 @@ if __name__ == "__main__":
     elif mode == "launch":
         from tr2 import fx_launch_look
         fx_launch_look.render()
+    elif mode == "cockpit":
+        cockpit_look()
     print(mode, "done in %.1f s" % (time.time() - t0))

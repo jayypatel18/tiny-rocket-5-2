@@ -19,6 +19,24 @@ Start: Tue Nov 10 01:54 IST 2026. Checkpoint 1 due 02:40 IST.
 - 02:12 flame: analytic jet tongue from the nozzle joined to the simulated flame field F, three flat tones (white core, yellow, orange). Layer order: back smoke, rocket, flame, front smoke (low lobes swallow the legs), jet, sparks, glow, bloom.
 - 02:14 contact sheet of 8 times in the first 1.25 s (`launch-evolve.jpg`).
 
+- 02:16 flame jet got a bell foot and a licking width; strays spawn as clusters of three; the old density tone path moved to `_density_smoke` (fallback only). Frame composite on the look still: 2.7 s (smoke and flame about 1.4 s, sparks cel 0.4 s, light passes the rest), on 2 threads.
+- 02:17 tested rocket states in dusk, night (window glow), morning (soot, squash) and sunrise (below view, legs folded, rattle, rot): all draw, design holds. One rocket at s=1 costs 0.18 s.
+- 02:18 checkpoint 1 stills saved: `build/review/launch-look.png`, `rocket-sheet.png`, `launch-evolve.jpg`. Reported to the director.
+
+## Phase 2 (from 02:18)
+- 02:19 scope changed by the director: B takes s5b_fuse and s9a_home, C the star of shot 8. Mine: cockpit layers first (A is blocked), then s6_lift. Keep `fx.sparks_layer` general for B. Next checkpoint 03:45: s6 contact sheet (`python3 render.py --sheet s6_lift 12`) and a half size clip (`--shot s6_lift --scale 0.5 --jobs 2`).
+- 02:24 cockpit layers in rocket.py: `draw_cockpit_back`, `cockpit_mask`, `draw_cockpit_front`, `draw_cockpit_inside` (see the comment block "cockpit close ups" in rocket.py). Stills: `build/review/cockpit-look.png`, `cockpit-warm.png`, `cockpit-inside.png` via `python3 tr2/fx_look.py cockpit`. Told the director (SendMessage) so A can start.
+- 02:26 `State.hatch_open` now draws: the kettle (with knob and spout) tips back 70 degrees on a hinge at the rim away from the handle (`_Proj.pa`, `_Proj.pv` swing a part about a pivot). Nothing else of the cel covers the space above the rim. Extra: `rocket.draw_hatch_back(...)` paints the dark mouth of the cup and its far rim on a cel that goes BEHIND the panda (optional). `rocket.mix_views(a, b, t)` blends two views (pass the dict as `view`).
+- 02:31 `fx.sparks_layer` fixed for animation: birth times are fixed (new `dur`), and `xf=(s, tx, ty)` runs the sparks in SET px and draws them through the camera.
+- 02:33 `tr2/fx_smoke.py`: smoke version 2 for motion. `Lobes` (spawn, step, alive, prune), `radius`, `render` (soft silhouette, wispy edge bites, haze, warp anchored to the set, fixed stack order: no popping, no boil), `flame` (ground splash field plus a jet tongue with a bell foot or a free tail).
+- 02:36 `tr2/shots/s6_lift.py`: choreography (`height`, `motion`, `camera`), `build_sim` (cache `build/cache/fx/s6/v3_fNNN.npz`: lobes, flame field F, t), `render`, `smoketest`. Camera: zoom 1.75 close and low, tilt follows with a lag, zoom eases to 1.5. Ignition: white frame at fl 7, two blown out frames, shake 36 px decaying.
+
+## Manager notes for s6 (relayed 02:22)
+1. Smoke must BILLOW and be tested in motion first; soft outer silhouette (2 to 4 px), wispy translucent edges, faint outer haze; tone boundaries inside stay crisp; orange inside, cool sky blue on top.
+2. Ignition is a low angle hero shot, closer: rocket about 800 px tall, big soft foreground grass.
+3. The ignition hits like a wall: one white flash frame, two frames of blown out bloom, heavy shake that decays, then the roll of smoke.
+Director smoke notes: vary lobe size (few big, many small), taper the ends into small puffs and wisps, a second thinner faster ground layer racing ahead.
+
 ## Director notes received
 - Rocket design approved: keep it exactly.
 - Engine: `core.Camera` has `tilt` and `pan` (px, camera rotation, no parallax). Use tilt for the long move in shot 6 plus a small cy rise.

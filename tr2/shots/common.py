@@ -154,12 +154,19 @@ def draw_panda(pic, cam, tod, act, light=None, shadow=True):
     X = act["X"]
     gy = ground_y(X)
     sc = s * act.get("s", 1.0)
+    px, py = X * s + tx, (gy + act.get("dY", 0.0)) * s + ty
+    # nothing to draw when the panda is out of frame (the camera has tilted away)
+    if px < -260 * sc or px > core.W + 260 * sc or py < -60 * sc or py > core.H + 230 * sc:
+        return
     if shadow and act.get("shadow", True):
         contact_shadow(pic, cam, X, gy + 4, 120 * act.get("s", 1.0), tod, 0.40)
-    cel = core.Cel(ss=2 if sc > 1.6 else 3)
-    panda.draw(cel, act["pose"], X * s + tx, (gy + act.get("dY", 0.0)) * s + ty, s=sc, tod=tod,
-               drawing=act.get("drawing", 0), light=light)
-    core.over(pic, cel.rgba())
+    # the panda gets its own cel, big enough for every limb and the tail, so no part ever
+    # falls off the edge of the drawing; it is then laid on the picture at its place
+    m = int(250 * sc)
+    bx0, by0 = int(px - m), int(py - 1.25 * m)
+    cel = core.Cel(w=2 * m, h=int(1.55 * m), ss=2 if sc > 1.6 else 3, x0=bx0, y0=by0)
+    panda.draw(cel, act["pose"], px, py, s=sc, tod=tod, drawing=act.get("drawing", 0), light=light)
+    core.over(pic, cel.rgba(), bx0, by0)
 
 
 def draw_map_prop(pic, cam, tod, t, wind=1.0, X=MAP_X, star_t=-1.0):

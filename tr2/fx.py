@@ -211,8 +211,8 @@ def lobe_smoke(fields, f, tod="launch", scale=5.0, ox=0.0, oy=0.0, seed=0, out_h
     a_top = np.clip((lv - 0.72) * 60.0 + 0.5, 0, 1)
     a_deep = np.clip((0.06 - lv) * 60.0 + 0.5, 0, 1)
     S = SMOKE
-    c_top = palette.mix(palette.lit(S["light"], T), T["sky"][-1][1], 0.38) * 1.02
-    c_body = palette.mix(T["fog"], np.array([0.60, 0.57, 0.74], np.float32), 0.5)
+    c_top = np.clip(palette.mix(palette.lit(S["light"], T), T["sky"][-1][1], 0.42) * 1.07, 0, 1)
+    c_body = palette.mix(T["fog"], np.array([0.60, 0.57, 0.74], np.float32), 0.5) * 0.92
     c_deep = palette.mix(palette.shade(S["light"], T), np.array([0.40, 0.33, 0.62], np.float32), 0.6)
     rgb = np.empty((hh, ww, 3), np.float32)
     rgb[:] = c_body
@@ -560,10 +560,12 @@ def _spark_sim(px, py, vx, vy, tb, life, bounce, gy, t, g, drag, ox, oy):
 
 
 def sparks_state(t, origin, seed=0, n=260, ground_y=None, spread=(8.0, 172.0), speed=(350.0, 1500.0),
-                 burst=0.35, gravity=1500.0, drag=1.6):
-    """Positions and velocities of the sparks t seconds after ignition."""
+                 burst=0.35, gravity=1500.0, drag=1.6, dur=None):
+    """Positions and velocities of the sparks t seconds after ignition. A third of them
+    leave in the first burst, the rest are born evenly over `dur` seconds (default 3 x
+    burst). Every spark has a fixed birth time, so frames of one shot agree."""
     rg = core.rng("sparks", seed)
-    tb = rg.random(n) * max(t, burst) - 0.02 * rg.random(n)
+    tb = rg.random(n) * (burst * 3.0 if dur is None else dur)
     tb[: n // 3] = rg.random(n // 3) * 0.06                       # the first burst
     side = rg.random(n) < 0.5
     lo, hi = spread
@@ -590,9 +592,20 @@ def sparks_state(t, origin, seed=0, n=260, ground_y=None, spread=(8.0, 172.0), s
 
 
 def sparks_layer(t, origin, seed=0, n=260, ground_y=None, spread=(8.0, 172.0), speed=(500.0, 2300.0),
-                 burst=0.35, shutter=1.0 / 24.0, size=1.0, frame=None, **kw):
-    """Motion blurred streaks: white hot heads, orange tails, every one its own size."""
+                 burst=0.35, shutter=1.0 / 24.0, size=1.0, frame=None, xf=None, **kw):
+    """Motion blurred streaks: white hot heads, orange tails, every one its own size.
+    Without xf everything is in screen px. With xf=(s, tx, ty) (core.Camera.xf(p)) the
+    origin, ground_y and speeds are in SET px and the result is drawn through the camera,
+    so the sparks stay put in the world while the camera moves. Extra keywords: gravity,
+    drag, dur (seconds over which sparks keep being born)."""
     px, py, vx, vy, age, rg = sparks_state(t, origin, seed, n, ground_y, spread, speed, burst, **kw)
+    if xf is not None:
+        s_, tx_, ty_ = xf
+        alive = px > -1e5
+        px = np.where(alive, px * s_ + tx_, px)
+        py = py * s_ + ty_
+        vx, vy = vx * s_, vy * s_
+        size = size * s_
     fr = int(round(t * 24)) if frame is None else frame
     fl = core.rng("sparkflick", seed, fr).random(n)
     szs = rg.uniform(0.45, 1.5, n) ** 2.2

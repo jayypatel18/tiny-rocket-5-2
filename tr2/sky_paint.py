@@ -19,7 +19,7 @@ from tr2 import core, palette
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "build", "cache", "sky")
 os.makedirs(CACHE, exist_ok=True)
-VERSION = 7
+VERSION = 8
 
 
 def cached(name, make):
@@ -251,16 +251,19 @@ def cloud_fields(kind, seed, z=0.0):
     sd = core.seed_of("cloudn", kind, seed) % 100000
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     if kind == "wisp":
-        # thin high cloud: combed streaks
-        n1 = core.fbm(h, w, 70, 5, sd + 1, aspect=7.0, z=z)
-        n2 = core.fbm(h, w, 22, 3, sd + 2, aspect=9.0, z=z)
-        rid = 1 - np.abs(2 * n1 - 1)
-        env = np.exp(-((yy - h * 0.5) / (h * 0.24)) ** 2) * ss(0.0, 0.25, xx / w) * ss(0.0, 0.25, 1 - xx / w)
+        # thin high cloud: combed streaks that curve a little and fray at the ends
+        bend = h * 0.16 * np.sin(xx / w * r.uniform(2.0, 4.5) + r.uniform(0, 6.28))
         tilt = (xx / w - 0.5) * r.uniform(-0.5, 0.5) * h * 0.4
-        env = np.exp(-((yy - h * 0.5 - tilt) / (h * 0.2)) ** 2) * ss(0.0, 0.3, xx / w) * ss(0.0, 0.3, 1 - xx / w)
-        a = ss(0.42, 0.9, rid * (0.6 + 0.6 * n2) * (0.35 + env)) * env
-        a = np.clip(a * 1.25, 0, 1) ** 0.9
-        light = 0.48 + 0.42 * ss(0.2, 0.9, a) + 0.25 * (n2 - 0.5) - 0.25 * (yy / h - 0.5)
+        yb = yy + bend + tilt
+        oy = float(r.uniform(0, 500))
+        n1 = ndimage.map_coordinates(core.fbm(h + 200, w, 30, 5, sd + 1, aspect=12.0, z=z),
+                                     [np.clip(yb + 100, 0, h + 199), xx], order=1)
+        n2 = core.fbm(h, w, 90, 3, sd + 2, aspect=5.0, z=z)
+        rid = 1 - np.abs(2 * n1 - 1)
+        env = np.exp(-((yb - h * 0.5) / (h * 0.21)) ** 2) * ss(0.0, 0.35, xx / w) * ss(0.0, 0.35, 1 - xx / w)
+        a = ss(0.50, 0.98, rid * (0.50 + 0.9 * n2) + 0.25 * env) * env ** 0.7
+        a = np.clip(a * 0.9, 0, 1)
+        light = 0.46 + 0.36 * ss(0.15, 0.8, a) + 0.2 * (n2 - 0.5) - 0.2 * (yy / h - 0.5)
         under = ss(0.45, 0.8, yy / h) * 0.6
         return np.stack([a, np.clip(light, 0, 1), under], -1).astype(np.float32)
 
@@ -393,3 +396,52 @@ def colourise(F, cols, alpha=1.0):
     c += (lit - c) * ss(0.50, 0.60, L)[..., None]
     c += (hi - c) * ss(0.76, 0.86, L)[..., None]
     return core.premul(c.astype(np.float32), np.clip(F[..., 0] * alpha, 0, 1))
+
+
+# ------------------------------------------------------------ sprite placing
+_MIPS = {}
+
+
+def mips(kind, seed, flip=False):
+    """A cloud sprite with its half size copies, for clean small placements."""
+    key = (kind, seed, flip)
+    if key not in _MIPS:
+        Fm = cloud_sprite(kind, seed)
+        if flip:
+            Fm = np.ascontiguousarray(Fm[:, ::-1])
+        lv = [Fm]
+        while lv[-1].shape[1] > 24:
+            a = lv[-1]
+            a = a[:a.shape[0] // 2 * 2, :a.shape[1] // 2 * 2]
+            lv.append(a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2, 3).mean(axis=(1, 3)))
+        _MIPS[key] = lv
+    return _MIPS[key]
+
+
+def place(dst, kind, seed, cx, cy, sc, cols, op=1.0, dl=0.0, flip=False):
+    """Draw a cloud sprite centred at (cx, cy) on a premultiplied RGBA layer,
+    scaled by sc, in the five tones `cols`. dl shifts its light."""
+    lv = mips(kind, seed, flip)
+    li = 0
+    s = sc
+    while s < 0.5 and li < len(lv) - 1:
+        s *= 2
+        li += 1
+    Fm = lv[li]
+    h, w = Fm.shape[:2]
+    x0 = cx - w * s / 2
+    y0 = cy - h * s / 2
+    X0, Y0 = max(int(math.floor(x0)), 0), max(int(math.floor(y0)), 0)
+    X1, Y1 = min(int(x0 + w * s) + 2, dst.shape[1]), min(int(y0 + h * s) + 2, dst.shape[0])
+    if X1 <= X0 or Y1 <= Y0:
+        return
+    if s > 1.0:
+        # big on screen: colour the sprite once at its own size, then enlarge
+        Fc = Fm if dl == 0.0 else np.concatenate([Fm[..., :1], np.clip(Fm[..., 1:2] + dl, 0, 1), Fm[..., 2:]], -1)
+        rgba = core.warp(colourise(Fc, cols, op), s, x0 - X0, y0 - Y0, out_hw=(Y1 - Y0, X1 - X0))
+    else:
+        Fw = core.warp(Fm, s, x0 - X0, y0 - Y0, out_hw=(Y1 - Y0, X1 - X0))
+        if dl != 0.0:
+            Fw[..., 1] = np.clip(Fw[..., 1] + dl, 0, 1)
+        rgba = colourise(Fw, cols, op)
+    core.over_rgba(dst[Y0:Y1, X0:X1], rgba)

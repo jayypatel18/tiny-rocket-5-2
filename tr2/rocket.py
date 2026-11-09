@@ -35,6 +35,13 @@ VIEWS = dict(
 )
 
 
+def mix_views(a, b, t):
+    """A view part way between two named views (pass the result as `view`), for a
+    camera that swings under the rocket during one continuous shot."""
+    A, B = VIEWS[a], VIEWS[b]
+    return {k: A[k] + (B[k] - A[k]) * float(t) for k in A}
+
+
 @dataclass
 class State:
     shake: tuple = (0.0, 0.0, 0.0)   # dx, dy px, rot radians
@@ -70,7 +77,7 @@ def _prof(name, n=5):
 
 class _Proj:
     def __init__(self, x, y, s, rot, view, st):
-        v = VIEWS[view]
+        v = VIEWS[view] if isinstance(view, str) else view      # a dict blends views (see mix_views)
         self.e0, self.e1, self.k, self.yaw = v["e"], v["e1"], v["k"], v["yaw"]
         self.e = self.e0 + 0.5 * self.e1
         self.s = s
@@ -78,6 +85,7 @@ class _Proj:
         self.sx = 1 + 0.11 * st.squash
         self.sy = 1 - 0.15 * st.squash
         self.ox, self.oy = x + st.shake[0], y + st.shake[1]
+        self.pa, self.pv = 0.0, np.zeros(2)
 
     def sc(self, h):
         return 1.0 / (1.0 + self.k * np.asarray(h, np.float64) / 500.0)
@@ -91,8 +99,13 @@ class _Proj:
         e = self.e0 + self.e1 * np.clip(h, 0, 520) / 500.0      # rings arch more the higher above the eye
         ly = (-(h * sc * (1 + 0.45 * self.k)) - r * e * np.cos(a) * sc) * self.sy
         c, sn = math.cos(self.rot), math.sin(self.rot)
-        return np.c_[(self.ox + (lx * c - ly * sn) * self.s).ravel(),
-                     (self.oy + (lx * sn + ly * c) * self.s).ravel()]
+        out = np.c_[(self.ox + (lx * c - ly * sn) * self.s).ravel(),
+                    (self.oy + (lx * sn + ly * c) * self.s).ravel()]
+        if self.pa != 0.0:                      # a part swung about a hinge (the kettle lid)
+            c, sn = math.cos(self.pa), math.sin(self.pa)
+            q = out - self.pv
+            out = np.c_[self.pv[0] + q[:, 0] * c - q[:, 1] * sn, self.pv[1] + q[:, 0] * sn + q[:, 1] * c]
+        return out
 
     def S(self, h, r, th):
         """Body fixed angle th (turns with the yaw of the view)."""
@@ -590,6 +603,9 @@ def draw(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=No
              (pr.depth(100 * D2R), lambda: _handle(d)),
              (pr.depth(80 * D2R), lambda: _spout(d)),
              (pr.depth(92 * D2R), lambda: _key(d))]
+    hatch = core.clamp(st.hatch_open)
+    if hatch > 0.01:
+        parts = [p for k_, p in enumerate(parts) if k_ != 4]       # the spout swings with the kettle
     parts.sort(key=lambda p: p[0])
     _legs(d, behind=True)
     for dep, fn in parts:
@@ -597,11 +613,36 @@ def draw(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=No
             fn()
     # bodies, top to bottom (we look from slightly below, so lower parts are nearer)
     tin_soot = d.sooty(R["tin"], 0.35)
+    if hatch > 0.01:
+        # the kettle is the hatch: it tips back about 70 degrees on a hinge at the rim, on the
+        # side away from the handle. Nothing else of this cel covers the space above the rim,
+        # so a panda drawn BEFORE the rocket shows its head through the open mouth of the cup.
+        side = -1.0 if math.sin(100 * D2R + pr.yaw) > 0 else 1.0
+        pr.pv = pr.P(427, 72, side * math.pi / 2)[0]
+        pr.pa = side * 70 * D2R * core.overshoot(hatch, 1.2) if hatch < 1 else side * 70 * D2R
+        # the dark inside of the kettle, seen through its open base
+        hs_, rs_ = _prof("kettle")
+        a_ = np.linspace(0, 2 * math.pi, 40, endpoint=False)
+        cc = pr.P(hs_[0], 0, 0)[0]
+        ax = pr.P(hs_[0], rs_[0], math.pi / 2)[0] - cc
+        up = pr.P(hs_[0] + rs_[0] * 0.30, 0, 0)[0] - cc
+        d.c.fill(cc + np.cos(a_)[:, None] * ax + np.sin(a_)[:, None] * up, d.shd(R["kettle"]) * 0.55)
+        if pr.depth(80 * D2R) < 0:
+            _spout(d)
     d.solid("knob", R["copper"], fire_frac=0.0)
     d.solid_ink()
     d.solid("kettle", R["kettle"], fire_frac=0.0)
     _kettle_details(d)
     d.solid_ink()
+    if hatch > 0.01:
+        if pr.depth(80 * D2R) >= 0:
+            _spout(d)
+        pv = pr.pv.copy()
+        pr.pa = 0.0
+        # the hinge: a little brass tab and pin on the rim
+        brass = R["copper"] * 0.6 + R["star"] * 0.4
+        d.fill(core.ellipse(pv[0], pv[1] - 1.5 * s, 5.2 * s, 6.5 * s, 14), d.lit(brass), ink=0.7, wob=0.2)
+        d.c.dot(pv[0], pv[1] - 1.5 * s, 1.5 * s, d.ink)
     d.solid("cup", R["cup"], fire_frac=0.36)
     _cup_details(d)
     d.solid_ink()
@@ -636,8 +677,450 @@ def draw(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=No
                 _args=(x, y, s, rot, view, st))
 
 
+def draw_hatch_back(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=None):
+    """Optional, for hatch_open > 0: the dark inside of the open teacup and its far rim.
+    Draw this on a cel that goes BEHIND the panda (same arguments as draw), then the panda,
+    then rocket.draw. Without it the opening simply shows whatever is behind the rocket."""
+    st = state or State()
+    pr = _Proj(x, y, s, rot, view, st)
+    d = _Draw(cel, pr, tod, drawing, st)
+    cc = pr.P(428, 0, 0)[0]
+    ax = pr.P(428, 73, math.pi / 2)[0] - pr.P(428, 0, math.pi / 2)[0]
+    up = pr.P(428 + 73 * 0.26, 0, math.pi / 2)[0] - pr.P(428, 0, math.pi / 2)[0]
+    cc = cc + (pr.P(428, 73, math.pi / 2)[0] - pr.P(428, 0, math.pi / 2)[0]) * 0.0
+    cc = (pr.P(428, 73, math.pi / 2)[0] + pr.P(428, 73, -math.pi / 2)[0]) / 2
+    a = np.linspace(0, 2 * math.pi, 48, endpoint=False)
+    pts = cc + np.cos(a)[:, None] * ax + np.sin(a)[:, None] * up
+    d.c.fill(pts, d.shd(R["cup"]) * 0.50)
+    far = cc + np.cos(a[:25])[:, None] * ax + np.sin(a[:25])[:, None] * up
+    d.line(far, 0.8, wob=0.2, taper=(0.03, 0.03))
+    d.c.stroke(cc + np.cos(a[2:23])[:, None] * ax * 0.93 + np.sin(a[2:23])[:, None] * up * 0.80, d.lw * 1.6,
+               d.shd(R["cup"]) * 0.8, taper=(0.3, 0.3))
+
+
 def draw_glass(cel, info, tod="dusk", drawing=0):
     """Glass reflections and the brass window rim, over whatever sits behind the glass."""
     x, y, s, rot, view, st = info["_args"]
     d = _Draw(cel, _Proj(x, y, s, rot, view, st), tod, drawing, st)
     _window(d, glass_only=True)
+
+
+# ============================================================ cockpit close ups
+# The same teacup and window, drawn large. Order for the outside view (s4b, s5a, s5c):
+#     draw_cockpit_back(cel, ...)        inside of the cup seen through the hole
+#     ... the panda, clipped with cockpit_mask(cx, cy, r) ...
+#     draw_cockpit_front(cel, ...)       porcelain wall, brass rim, glass on top
+# and for the inside view (s7b): sky, draw_cockpit_inside(cel, ...), then the panda in front.
+WARM = np.array([1.34, 0.87, 0.47], np.float32)
+
+
+class _Close:
+    def __init__(self, cel, tod, drawing, r, light):
+        self.c, self.dr, self.k = cel, int(drawing), r / 380.0
+        self.T = palette.TOD[tod] if isinstance(tod, str) else tod
+        self.ink = self.T["ink"]
+        self.sun_r = self.T["sun"][0] >= 0
+        self.sg = 1.0 if self.sun_r else -1.0
+        self.light = float(light or 0.0)
+        self.lw = 4.4 * max(0.5, self.k) ** 0.8
+        self.n = 0
+
+    def warm(self, c):
+        if self.light <= 0.01:
+            return np.asarray(c, np.float32)
+        return palette.mix(c, np.clip(np.asarray(c, np.float32) * WARM * 1.25 + 0.04, 0, 1), min(1.0, self.light) * 0.8)
+
+    def lit(self, c):
+        return self.warm(palette.lit(c, self.T))
+
+    def shd(self, c, k=1.0):
+        return self.warm(palette.shade(c, self.T) * k)
+
+    def rimc(self, c):
+        return palette.rim(c, self.T)
+
+    def wob(self, pts, amp=1.0, freq=0.012):
+        self.n += 1
+        return core.wobble(pts, amp * self.k, core.seed_of("cp", self.n, self.dr) % 9973, freq)
+
+    def fill(self, pts, col, ink=0.0, amp=1.0):
+        p = self.wob(pts, amp) if amp > 0 else np.asarray(pts, np.float64)
+        self.c.fill(p, col)
+        if ink > 0:
+            self.c.stroke(p, self.lw * ink, self.ink, closed=True, seed=self.n)
+        return p
+
+    def line(self, pts, w=1.0, col=None, taper=(0.12, 0.18), amp=1.0):
+        p = self.wob(pts, amp) if amp > 0 else np.asarray(pts, np.float64)
+        self.c.stroke(p, self.lw * w, self.ink if col is None else col, taper=taper, seed=self.n)
+
+
+def _sector(cx, cy, r0, r1, a0, a1, n=40):
+    a = np.linspace(a0, a1, n)
+    return np.vstack([np.c_[cx + np.cos(a) * r1, cy + np.sin(a) * r1],
+                      np.c_[cx + np.cos(a[::-1]) * r0, cy + np.sin(a[::-1]) * r0]])
+
+
+def _ring_poly(cx, cy, r0, r1, n=120, ox=0.0, oy=0.0):
+    """An annulus as one keyhole polygon (outer circle may be offset by ox, oy)."""
+    a = np.linspace(0, 2 * math.pi, n + 1)
+    outer = np.c_[cx + ox + np.cos(a) * r1, cy + oy + np.sin(a) * r1]
+    inner = np.c_[cx + np.cos(a[::-1]) * r0, cy + np.sin(a[::-1]) * r0]
+    return np.vstack([outer, inner])
+
+
+def _holed_frame(cel, cx, cy, r, pad=60, n=140):
+    """The whole cel area with a round hole, as one keyhole polygon."""
+    a = np.linspace(-math.pi / 2, 1.5 * math.pi, n + 1)
+    hole = np.c_[cx + np.cos(a[::-1]) * r, cy + np.sin(a[::-1]) * r]
+    x0, y0, x1, y1 = cel.x0 - pad, cel.y0 - pad, cel.x0 + cel.w + pad, cel.y0 + cel.h + pad
+    rect = np.array([(cx, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0), (cx, y0)], np.float64)
+    return np.vstack([rect, hole])
+
+
+def cockpit_mask(cx=960, cy=560, r=380, w=core.W, h=core.H, grow=3.0):
+    """H x W float alpha of the round window opening, to clip the panda behind the glass."""
+    ss = 2
+    m = Image.new("L", (w * ss, h * ss), 0)
+    rr = (r + grow) * ss
+    ImageDraw.Draw(m).ellipse([cx * ss - rr, cy * ss - rr, cx * ss + rr, cy * ss + rr], fill=255)
+    return np.asarray(m.reduce(ss), np.float32) / 255.0
+
+
+def _pinned(q, x, y, w, h, rot, kind, seed):
+    """A paw drawing on a scrap of paper, held by a pin."""
+    rg = core.rng("pinned", seed)
+    c, s = math.cos(rot), math.sin(rot)
+
+    def tr(pts):
+        p = np.asarray(pts, np.float64) * (w * 0.5, h * 0.5)
+        return np.c_[x + p[:, 0] * c - p[:, 1] * s, y + p[:, 0] * s + p[:, 1] * c]
+
+    paper = R["paper"] if kind == "rocket" else R["sail"]
+    corners = [(-1, -1), (1, -0.94), (0.96, 1), (0.55, 1.02), (-1.02, 0.95)]
+    q.fill(tr(corners), q.shd(paper, 1.18), ink=0.55, amp=1.2)
+    q.c.fill(tr([(0.55, 1.02), (0.96, 1), (0.98, 0.62)]), q.shd(paper, 0.86))          # a curled corner
+    q.line(tr([(0.55, 1.02), (0.98, 0.62)]), 0.4, amp=0)
+    dc = palette.mix(q.ink, q.shd(R["patch_blue"]), 0.45)
+    if kind == "rocket":
+        q.line(tr([(-0.15, 0.55), (-0.2, -0.25), (0.02, -0.62), (0.24, -0.25), (0.2, 0.55), (-0.15, 0.55)]), 0.5, dc)
+        q.line(tr([(-0.17, 0.3), (-0.5, 0.66), (-0.16, 0.56)]), 0.45, dc)
+        q.line(tr([(0.21, 0.3), (0.52, 0.66), (0.2, 0.56)]), 0.45, dc)
+        q.c.fill(core.ellipse(*tr([(0.02, -0.12)])[0], w * 0.06, w * 0.06, 14), dc)
+        for i in range(3):
+            q.line(tr([(-0.06 + 0.08 * i, 0.62), (-0.1 + 0.12 * i, 0.86)]), 0.4, q.shd(R["patch_red"], 1.2), amp=0)
+        st = _star(rg, 0.14) + (0.58, -0.6)
+        q.c.fill(tr(st), q.shd(R["star"], 1.25))
+    else:
+        # a star map: dots joined by a wobbly line, one big star, a crescent
+        pts = [(-0.7, 0.5), (-0.35, 0.1), (-0.05, 0.3), (0.3, -0.2), (0.62, -0.05)]
+        q.line(tr(pts), 0.35, dc, taper=(0.0, 0.0))
+        for p in pts:
+            q.c.fill(core.ellipse(*tr([p])[0], w * 0.028, w * 0.028, 10), dc)
+        q.c.fill(tr(_star(rg, 0.2) + (0.36, -0.58)), q.shd(R["star"], 1.25))
+        q.line(tr([(-0.62, -0.62), (-0.78, -0.4), (-0.6, -0.22)]), 0.45, dc)
+    pin = tr([(0.02, -0.86)])[0]
+    q.c.fill(core.ellipse(pin[0], pin[1], w * 0.055, w * 0.055, 14), q.shd(R["patch_red"], 1.3))
+    q.c.stroke(core.ellipse(pin[0], pin[1], w * 0.055, w * 0.055, 14), q.lw * 0.4, q.ink, closed=True)
+    q.c.dot(pin[0] - w * 0.015, pin[1] - w * 0.02, w * 0.016, q.rimc(R["patch_red"]))
+
+
+def _dial(q, x, y, rad):
+    brass = R["copper"] * 0.55 + R["star"] * 0.45
+    glow = np.array([1.0, 0.84, 0.50], np.float32)
+    q.fill(core.ellipse(x, y, rad, rad, 40), q.shd(brass, 1.25), ink=0.7, amp=0.6)
+    face = palette.mix(palette.shade(R["paper"], q.T), glow, 0.72)
+    q.fill(core.ellipse(x, y, rad * 0.78, rad * 0.78, 36), face, ink=0.45, amp=0.4)
+    q.c.fill(_sector(x, y, rad * 0.5, rad * 0.78, 0.2, 2.4, 16), palette.mix(face, q.shd(brass), 0.35))
+    for a in np.linspace(math.pi * 0.85, math.pi * 2.15, 7):
+        p0 = (x + math.cos(a) * rad * 0.56, y + math.sin(a) * rad * 0.56)
+        p1 = (x + math.cos(a) * rad * 0.70, y + math.sin(a) * rad * 0.70)
+        q.line(np.array([p0, p1]), 0.35, amp=0, taper=(0, 0))
+    a = math.pi * 1.62 + 0.08 * core.noise1(q.dr * 0.37, 5)
+    q.line(np.array([(x - math.cos(a) * rad * 0.12, y - math.sin(a) * rad * 0.12),
+                     (x + math.cos(a) * rad * 0.62, y + math.sin(a) * rad * 0.62)]), 0.55,
+           q.shd(R["patch_red"], 1.1), amp=0, taper=(0.0, 0.5))
+    q.c.dot(x, y, rad * 0.09, q.ink)
+
+
+def _strap(q, pts, width):
+    poly, cl, nr = _ribbon(pts, width, width * 0.92, n=8)
+    q.fill(poly, q.shd(R["sail"], 0.95), ink=0.6, amp=0.8)
+    for sgn in (-1, 1):
+        q.line(cl + nr * sgn * width * 0.33, 0.25, palette.mix(q.ink, q.shd(R["sail"]), 0.4), amp=0.3, taper=(0, 0))
+    k = len(cl) // 2
+    b = cl[k]
+    brass = R["copper"] * 0.55 + R["star"] * 0.45
+    q.fill(core.ellipse(b[0], b[1], width * 0.72, width * 0.5, 18, rot=math.atan2(nr[k][1], nr[k][0])),
+           q.shd(brass, 1.2), ink=0.5, amp=0.3)
+
+
+def draw_cockpit_back(cel, tod="predawn", drawing=0, cx=960, cy=560, r=380, light=None):
+    """The inside of the teacup seen through the window: the curved inner wall in shadow,
+    two pinned paw drawings, a tiny dial with a warm glow, a strap. light 0..1 warms it
+    (match, fuse or fire)."""
+    q = _Close(cel, tod, drawing, r, light)
+    wall = q.shd(R["cup"], 0.70)
+    q.c.fill(core.ellipse(cx, cy, r * 1.1, r * 1.1, 90), wall)
+    # where the window light lands on the far wall: one lighter flat shape
+    q.fill(core.ellipse(cx - q.sg * r * 0.30, cy + r * 0.12, r * 0.78, r * 0.66, 60, rot=-0.25 * q.sg),
+           q.shd(R["cup"], 0.88), amp=5.0)
+    q.c.fill(core.ellipse(cx - q.sg * r * 0.36, cy + r * 0.2, r * 0.50, r * 0.40, 50, rot=-0.25 * q.sg),
+             q.shd(R["cup"], 1.0))
+    # the wall curves: two faint ring lines and the deep shadow of the far side
+    faint = palette.mix(wall, q.ink, 0.35)
+    for yy, sag in ((-0.66, 0.10), (0.78, -0.08)):
+        xs = np.linspace(-1.05, 1.05, 24)
+        q.line(np.c_[cx + xs * r, cy + (yy + sag * xs ** 2) * r], 0.45, faint, taper=(0.0, 0.0), amp=1.5)
+    deep = _sector(cx, cy, r * 0.80, r * 1.1, (-0.5 if q.sun_r else 2.6) - 0.0, (1.1 if q.sun_r else 4.2), 40)
+    q.c.fill(q.wob(deep, 4.0), q.shd(R["cup"], 0.56))
+    _pinned(q, cx - r * 0.60, cy - r * 0.50, r * 0.36, r * 0.44, -0.13, "rocket", 0)
+    _pinned(q, cx + r * 0.58, cy - r * 0.46, r * 0.34, r * 0.34, 0.16, "map", 1)
+    # the dial and the pool of its glow on the wall
+    dx, dy, dr_ = cx + r * 0.63, cy + r * 0.47, r * 0.15
+    q.fill(core.ellipse(dx, dy, dr_ * 1.9, dr_ * 1.75, 40), palette.mix(wall, np.array([0.95, 0.66, 0.38], np.float32), 0.30),
+           amp=3.0)
+    _dial(q, dx, dy, dr_)
+    _strap(q, [(cx - r * 1.02, cy - r * 0.08), (cx - r * 0.86, cy + r * 0.36), (cx - r * 0.62, cy + r * 0.72),
+               (cx - r * 0.32, cy + r * 1.0)], r * 0.10)
+
+
+def _crazing(q, x, y, length, seed, n_branch=4):
+    rg = core.rng("craze", seed)
+    col = palette.mix(q.shd(R["cup"]), q.ink, 0.42)
+    a = rg.uniform(0, 2 * math.pi)
+    p = np.array([x, y], np.float64)
+    trunk = [p.copy()]
+    for i in range(7):
+        a += rg.normal(0, 0.45)
+        p = p + np.array([math.cos(a), math.sin(a)]) * length / 7
+        trunk.append(p.copy())
+    trunk = np.array(trunk)
+    q.c.stroke(trunk, q.lw * 0.30, col, taper=(0.1, 0.6))
+    for b in range(n_branch):
+        k = rg.integers(1, 6)
+        a2 = rg.uniform(0, 2 * math.pi)
+        p = trunk[k].copy()
+        br = [p.copy()]
+        for i in range(4):
+            a2 += rg.normal(0, 0.5)
+            p = p + np.array([math.cos(a2), math.sin(a2)]) * length / 11
+            br.append(p.copy())
+        q.c.stroke(np.array(br), q.lw * 0.22, col, taper=(0.0, 0.7))
+
+
+def _wall_outside(q, cel, cx, cy, r):
+    """The porcelain outside wall around the hole: blue band, drips, crazing, a chip."""
+    cup, band = R["cup"], R["cup_band"]
+    hole_r = r * 1.03
+    q.c.fill(_holed_frame(cel, cx, cy, hole_r), q.lit(cup))
+    x0, x1 = cel.x0 - 60.0, cel.x0 + cel.w + 60.0
+    y0, y1 = cel.y0 - 60.0, cel.y0 + cel.h + 60.0
+    # the one shadow tone: the wall turning away from the light
+    ys = np.linspace(y0, y1, 20)
+    xb = cx - q.sg * (r * 1.52 + r * 0.16 * np.cos((ys - cy) / r * 0.9))
+    edge = np.c_[xb, ys]
+    far = x0 if q.sun_r else x1
+    q.c.fill(np.vstack([q.wob(edge, 5.0, 0.004), [(far, y1), (far, y0)]]), q.shd(cup))
+    # the blue band: an arch across the top, cut where the window rises into it
+    xs = np.linspace(x0, x1, 120)
+    sag = 0.03 * r * ((xs - cx) / r) ** 2
+    up = cy - 1.44 * r + sag
+    lo = cy - 0.80 * r + sag
+    inside = np.abs(xs - cx) < hole_r
+    circ = cy - np.sqrt(np.maximum(hole_r ** 2 - (xs - cx) ** 2, 0.0))
+    lo2 = np.where(inside, np.minimum(lo, circ), lo)
+    bandp = np.vstack([np.c_[xs, up], np.c_[xs, lo2][::-1]])
+    q.c.fill(bandp, q.lit(band))
+    xbb = cx - q.sg * r * 1.60
+    sel = xs < xbb if q.sun_r else xs > xbb
+    if sel.sum() > 2:
+        q.c.fill(np.vstack([np.c_[xs[sel], up[sel]], np.c_[xs[sel], lo2[sel]][::-1]]), q.shd(band))
+    # paint drips under the band, each its own length
+    rg = core.rng("cupdrips")
+    for i in range(11):
+        x = x0 + (i + rg.uniform(0.15, 0.85)) * (x1 - x0) / 11
+        if abs(x - cx) < r * 1.36:
+            continue
+        yb = cy - 0.80 * r + 0.03 * r * ((x - cx) / r) ** 2 - 3
+        ln = rg.uniform(0.06, 0.30) * r
+        wd = rg.uniform(0.030, 0.052) * r
+        col = q.shd(band) if ((x < xbb) == q.sun_r) else q.lit(band)
+        q.c.stroke(np.array([(x, yb - 4), (x + rg.normal(0, 2), yb + ln)]), wd, col, taper=(0.0, 0.25), min_w=0.5)
+        q.c.dot(x, yb + ln, wd * 0.62, col)
+    q.line(np.c_[xs, up], 0.5, amp=1.2, taper=(0, 0))
+    for seg in (xs < cx - hole_r * 0.72, xs > cx + hole_r * 0.72):
+        if seg.sum() > 2:
+            q.line(np.c_[xs[seg], lo[seg]], 0.5, amp=1.2, taper=(0.0, 0.0))
+    # hairline crazing and a chip
+    for i, (ax, ay, ln) in enumerate(((1.62, 0.62, 0.55), (-1.86, -0.30, 0.5), (-0.7, 1.36, 0.42), (2.05, -0.55, 0.4),
+                                      (-1.55, 0.95, 0.36))):
+        _crazing(q, cx + ax * r, cy + ay * r, ln * r, i)
+    # the glaze: one long shine on the sun side and a short one under it
+    gl = np.clip(palette.mix(q.lit(cup), q.rimc(cup), 0.55), 0, 1)
+    for (ax, y_a, y_b, wd) in ((1.98, -0.62, 0.50, 0.050), (1.93, 0.62, 0.86, 0.036)):
+        ysg = np.linspace(cy + y_a * r, cy + y_b * r, 14)
+        xsg = cx + q.sg * (ax * r + 0.10 * r * ((ysg - cy) / r) ** 2)
+        poly, _, _ = _ribbon(np.c_[xsg, ysg], 0.004 * r, wd * r, n=3)
+        mid = _ribbon(np.c_[xsg, ysg], wd * r, wd * r * 0.9, n=3)[0]
+        q.c.fill(q.wob(mid, 1.2), gl)
+        q.c.dot(xsg[0], ysg[0], wd * r * 0.5, gl)
+        q.c.dot(xsg[-1], ysg[-1], wd * r * 0.45, gl)
+    chx, chy = cx + r * 1.72, cy + r * 0.98
+    chip = np.array([(-1, -0.2), (-0.3, -0.9), (0.6, -0.6), (1.0, 0.2), (0.3, 0.8), (-0.6, 0.6)]) * r * 0.07 + (chx, chy)
+    q.fill(chip, q.lit(np.array([0.60, 0.50, 0.44], np.float32)), ink=0.5, amp=1.0)
+    q.c.fill(chip[[0, 1, 2]] * 0.6 + chip.mean(0) * 0.4, q.shd(np.array([0.60, 0.50, 0.44], np.float32)))
+
+
+def _brass_rim(q, cx, cy, r, inside=False):
+    brass = R["copper"] * 0.55 + R["star"] * 0.45
+    r1 = r * (1.16 if inside else 1.25)
+    sa = math.atan2(q.T["sun"][1], q.T["sun"][0])            # angle toward the sun
+    if not inside:
+        # shadow the rim casts on the wall, away from the sun
+        q.c.fill(_ring_poly(cx, cy, r * 1.02, r1 * 1.0, ox=-math.cos(sa) * r * 0.075, oy=-math.sin(sa) * r * 0.075 + r * 0.02),
+                 q.shd(R["cup"], 0.92))
+    q.c.fill(_ring_poly(cx, cy, r, r1), q.lit(brass) if not inside else q.shd(brass, 1.15))
+    # shadow tone on the half of the ring that faces away, inner bevel, one highlight arc
+    # (a crescent that tapers to nothing at both ends, never a pie slice)
+    dsh = (r1 - r * 1.045) * 0.62
+    ph = np.linspace(math.pi * 0.5, math.pi * 1.5, 60)
+    rho = dsh * np.cos(ph) + np.sqrt(np.maximum(r1 ** 2 - (dsh * np.sin(ph)) ** 2, 0.0))
+    cres = np.vstack([np.c_[cx + np.cos(ph + sa) * r1, cy + np.sin(ph + sa) * r1],
+                      np.c_[cx + np.cos(ph[::-1] + sa) * rho[::-1], cy + np.sin(ph[::-1] + sa) * rho[::-1]]])
+    q.c.fill(q.wob(cres, 1.2), q.shd(brass))
+    q.c.fill(_ring_poly(cx, cy, r, r * 1.045), q.shd(brass, 0.82))
+    hi = np.clip(palette.mix(q.lit(brass), q.rimc(brass), 0.45), 0, 1)
+    q.c.fill(_sector(cx, cy, r * 1.008, r * 1.04, sa + math.pi * 0.74, sa + math.pi * 1.22, 40), hi)
+    if not inside:
+        q.c.fill(_sector(cx, cy, r * 1.192, r * 1.208, sa - 0.62, sa + 0.34, 30), hi)
+        q.c.fill(_sector(cx, cy, r * 1.192, r * 1.205, sa + 0.46, sa + 0.56, 8), hi)
+    a = np.linspace(0, 2 * math.pi, 120, endpoint=False)
+    for rr, w in ((r1, 1.0), (r, 0.9), (r * 1.045, 0.45)):
+        q.c.stroke(q.wob(np.c_[cx + np.cos(a) * rr, cy + np.sin(a) * rr], 1.0), q.lw * w, q.ink, closed=True,
+                   seed=int(rr) % 97)
+    # rivets (nuts on the inside), no two set quite alike
+    rg = core.rng("rimrivets", inside)
+    rm = (r * 1.045 + r1) / 2
+    for i in range(8):
+        ang = 0.38 + i * math.pi / 4 + rg.normal(0, 0.03)
+        if abs(((ang - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 0.33 and not inside:
+            continue                                         # the hinge sits here
+        px, py = cx + math.cos(ang) * rm, cy + math.sin(ang) * rm
+        rv = r * rg.uniform(0.027, 0.034)
+        pts = core.ellipse(px, py, rv, rv, 6 if inside else 18, rot=rg.uniform(0, 1))
+        q.c.fill(pts, q.shd(brass, 1.1))
+        q.c.fill(core.ellipse(px + math.cos(sa) * rv * 0.25, py + math.sin(sa) * rv * 0.25, rv * 0.62, rv * 0.62, 12),
+                 q.lit(brass))
+        q.c.stroke(pts, q.lw * 0.45, q.ink, closed=True)
+        q.c.dot(px + math.cos(sa) * rv * 0.4, py + math.sin(sa) * rv * 0.4, rv * 0.2, q.rimc(brass))
+    return r1
+
+
+def _hinge(q, cx, cy, r, side=-1.0):
+    brass = R["copper"] * 0.7 + R["star"] * 0.3
+    x_in, x_out = cx + side * r * 1.10, cx + side * r * 1.52
+    hh = r * 0.17
+    plate = np.array([(x_in, cy - hh), (x_out, cy - hh * 0.86), (x_out + side * r * 0.03, cy), (x_out, cy + hh * 0.9),
+                      (x_in, cy + hh)])
+    q.fill(plate, q.lit(brass), ink=0.8, amp=1.0)
+    q.c.fill(np.array([(x_in, cy + hh * 0.2), (x_out, cy + hh * 0.3), (x_out, cy + hh * 0.9), (x_in, cy + hh)]), q.shd(brass))
+    q.line(plate[[4, 3, 2, 1, 0]], 0.8, amp=0, taper=(0.0, 0.0))
+    xk = cx + side * r * 1.29
+    for j, yk in enumerate((cy - hh * 0.78, cy - hh * 0.05, cy + hh * 0.68)):          # the knuckles on the pin
+        kn = core.ellipse(xk, yk, r * 0.036, hh * 0.30, 18)
+        q.fill(kn, q.lit(brass) if j != 2 else q.shd(brass, 1.1), ink=0.6, amp=0.4)
+    q.c.dot(xk, cy - hh * 1.12, r * 0.022, q.ink)
+    for sx in (1.17, 1.43):
+        px = cx + side * r * sx
+        q.c.dot(px, cy - hh * 0.45, r * 0.02, q.ink)
+        q.c.dot(px, cy + hh * 0.5, r * 0.02, q.ink)
+
+
+def _glass(q, cx, cy, r, reflect=0.0, fog=0.0, strength=1.0):
+    """Two diagonal reflection bands that slide with `reflect`, and breath fog."""
+    rr = r * 0.985
+    a = np.linspace(0, 2 * math.pi, 220, endpoint=False)
+    circ = np.c_[np.cos(a), np.sin(a)]
+    axis = np.array([0.74, 0.67])
+    u = circ @ axis
+    sky = palette.sky_color(q.T, 0.62)
+    col = np.clip(palette.mix(sky, (1.0, 1.0, 1.0), 0.45), 0, 1)
+    sh = (reflect % 1.0) * 1.9 if reflect else 0.0
+    for lo, hi, al in ((-0.70, -0.40, 0.30), (-0.30, -0.21, 0.20)):
+        lo2, hi2 = lo + sh, hi + sh
+        if lo2 > 0.97:
+            lo2, hi2 = lo2 - 1.95, hi2 - 1.95
+        sel = (u > lo2) & (u < hi2)
+        if sel.sum() >= 3:
+            pts = circ[sel]
+            # order the two arcs of the band into one outline
+            v = pts @ np.array([-axis[1], axis[0]])
+            near = pts[np.abs(pts @ axis - lo2) < np.abs(pts @ axis - hi2)]
+            farp = pts[np.abs(pts @ axis - lo2) >= np.abs(pts @ axis - hi2)]
+            near = near[np.argsort(near @ np.array([-axis[1], axis[0]]))]
+            farp = farp[np.argsort(-(farp @ np.array([-axis[1], axis[0]])))]
+            poly = np.vstack([near, farp]) * rr + (cx, cy)
+            q.c.fill(q.wob(poly, 1.5), col, alpha=al * strength)
+    # the thin bright crescent where the glass meets the rim, on the sky side
+    sa = math.atan2(q.T["sun"][1], q.T["sun"][0])
+    q.c.fill(_sector(cx, cy, rr * 0.955, rr, sa - 2.6, sa - 1.5, 30), col, alpha=0.42 * strength)
+    if fog > 0.01:
+        fx_, fy_ = cx + r * 0.06, cy + r * 0.44
+        q.c.fill(q.wob(core.ellipse(fx_, fy_, r * 0.46 * (0.6 + 0.4 * fog), r * 0.33 * (0.6 + 0.4 * fog), 40), 9.0, 0.006),
+                 (0.93, 0.95, 0.98), alpha=0.22 * fog)
+        q.c.fill(q.wob(core.ellipse(fx_ + r * 0.03, fy_ + r * 0.02, r * 0.28 * (0.6 + 0.4 * fog), r * 0.19 * (0.6 + 0.4 * fog), 30),
+                       6.0, 0.006), (0.96, 0.97, 1.0), alpha=0.20 * fog)
+
+
+def draw_cockpit_front(cel, tod="predawn", drawing=0, cx=960, cy=560, r=380, reflect=0.0, light=None, fog=0.0):
+    """The outside of the teacup filling the frame around the window hole, the thick brass
+    rim with rivets and a hinge, and the glass on top. reflect 0..1 slides the reflections
+    across the glass, fog 0..1 is breath on the glass, light 0..1 warms everything (fire)."""
+    q = _Close(cel, tod, drawing, r, light)
+    _wall_outside(q, cel, cx, cy, r)
+    _hinge(q, cx, cy, r, -1.0 if q.sun_r else 1.0)
+    _brass_rim(q, cx, cy, r)
+    _glass(q, cx, cy, r, reflect, fog)
+    return dict(window=(cx, cy, r))
+
+
+def draw_cockpit_inside(cel, tod="sunrise", drawing=0, window=(1240, 430, 250), light=0.0, reflect=0.0):
+    """Camera inside the teacup (s7b): the inner wall fills the frame with a round hole
+    where the sky shows (left transparent), the window frame from inside with its nuts
+    and hinge, pinned drawings, the dial, a strap. light 0..1 floods the wall with the
+    colour of the key light. Draw the sky first, this layer, then the panda in front."""
+    wx, wy, r = window
+    q = _Close(cel, tod, drawing, r, 0.0)
+    cup = R["cup"]
+    flood = float(light)
+    wall = palette.mix(q.shd(cup, 0.74), np.clip(palette.lit(cup, q.T) * 0.92, 0, 1), 0.55 * flood)
+    wall_dk = palette.mix(q.shd(cup, 0.54), q.shd(cup, 0.9), 0.6 * flood)
+    wall_hi = palette.mix(q.shd(cup, 0.92), np.clip(palette.lit(cup, q.T), 0, 1), 0.3 + 0.7 * flood)
+    q.c.fill(_holed_frame(cel, wx, wy, r * 1.03), wall)
+    x0, x1 = cel.x0 - 60.0, cel.x0 + cel.w + 60.0
+    y0, y1 = cel.y0 - 60.0, cel.y0 + cel.h + 60.0
+    # the wall curving toward us on both sides falls into a deeper tone
+    ys = np.linspace(y0, y1, 18)
+    for sgn in (-1.0, 1.0):
+        xb = wx + sgn * (r * 2.3 + r * 0.25 * np.cos((ys - wy) / r * 0.7)) - r * 0.5
+        far = x0 if sgn < 0 else x1
+        q.c.fill(np.vstack([q.wob(np.c_[xb, ys], 6.0, 0.004), [(far, y1), (far, y0)]]), wall_dk)
+    # light spilling round the opening: a lighter halo of wall, wider when the gold floods in
+    q.c.fill(q.wob(_ring_poly(wx, wy, r * 1.1, r * (1.36 + 0.34 * flood), n=90), 7.0, 0.005), wall_hi)
+    faint = palette.mix(wall, q.ink, 0.30)
+    for yy, sag in ((-1.72, 0.05), (1.86, -0.04)):
+        xs = np.linspace(x0, x1, 40)
+        q.line(np.c_[xs, wy + (yy + sag * ((xs - wx) / r) ** 2) * r], 0.4, faint, taper=(0.0, 0.0), amp=2.0)
+    for i, (ax, ay, ln) in enumerate(((-1.8, 0.9, 0.5), (1.5, 1.5, 0.45), (-2.6, -0.9, 0.4))):
+        _crazing(q, wx + ax * r, wy + ay * r, ln * r, 20 + i)
+    _pinned(q, wx - r * 2.05, wy - r * 0.30, r * 0.62, r * 0.76, -0.10, "rocket", 0)
+    _pinned(q, wx - r * 2.75, wy + r * 0.62, r * 0.56, r * 0.56, 0.14, "map", 1)
+    dx, dy, dr_ = wx + r * 1.65, wy + r * 1.30, r * 0.26
+    q.fill(core.ellipse(dx, dy, dr_ * 1.8, dr_ * 1.7, 40), palette.mix(wall, np.array([0.95, 0.66, 0.38], np.float32), 0.28), amp=3.0)
+    _dial(q, dx, dy, dr_)
+    _strap(q, [(wx + r * 1.7, y0), (wx + r * 1.95, wy - r * 0.6), (wx + r * 2.3, wy + r * 0.2), (x1 + 20, wy + r * 0.55)], r * 0.17)
+    _hinge(q, wx, wy, r * 0.93, 1.0 if q.sun_r else -1.0)
+    _brass_rim(q, wx, wy, r, inside=True)
+    _glass(q, wx, wy, r, reflect, 0.0, strength=0.6)
+    return dict(window=(wx, wy, r))

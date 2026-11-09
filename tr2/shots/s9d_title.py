@@ -12,10 +12,11 @@ PAPER = np.array([0.95, 0.91, 0.80], np.float32)
 
 
 def camera(t, n_t=6.5):
-    u = core.ease_io(core.span(t, 0.2, 3.2), 1.9)
+    # close on the panda for the look and the tail curl, then pull back and up to give the sky to the title
+    u = core.ease_io(core.span(t, 1.25, 3.1), 2.0)
     dx, dy = common.drift(t + 50.0, 2.2, 7)
-    return core.Camera(cx0=1600, cy0=900, cx=core.lerp(1560.0, 1960.0, u) + dx, cy=core.lerp(960.0, 792.0, u) + dy,
-                       zoom=core.lerp(1.55, 1.05, u))
+    return core.Camera(cx0=1600, cy0=900, cx=core.lerp(1300.0, 1960.0, u) + dx, cy=core.lerp(985.0, 792.0, u) + dy,
+                       zoom=core.lerp(2.5, 1.05, u))
 
 
 def render(fl, n, f):
