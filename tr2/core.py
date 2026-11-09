@@ -494,11 +494,16 @@ class Camera:
     1 = the character plane, > 1 = foreground in front of the character.
     """
 
-    def __init__(self, cx0=W / 2, cy0=H / 2, cx=None, cy=None, zoom=1.0, dolly=1.0, shake=(0.0, 0.0)):
+    def __init__(self, cx0=W / 2, cy0=H / 2, cx=None, cy=None, zoom=1.0, dolly=1.0, shake=(0.0, 0.0),
+                 tilt=0.0, pan=0.0):
         self.cx0, self.cy0 = cx0, cy0
         self.cx = cx0 if cx is None else cx
         self.cy = cy0 if cy is None else cy
         self.zoom, self.dolly, self.shake = zoom, dolly, shake
+        # tilt / pan: the camera ROTATES up (tilt > 0) or right (pan > 0). Unlike moving
+        # cx, cy (a crane or dolly, which gives parallax), a rotation shifts EVERY layer,
+        # the sky included, by the same number of screen px: tilt px down, pan px left.
+        self.tilt, self.pan = tilt, pan
 
     def xf(self, p=1.0):
         """(s, tx, ty): a set point (X, Y) on a layer of parallax p lands at
@@ -506,8 +511,8 @@ class Camera:
         s = self.zoom * (self.dolly ** p)
         ax = self.cx0 + (self.cx - self.cx0) * p
         ay = self.cy0 + (self.cy - self.cy0) * p
-        tx = W / 2 - ax * s + self.shake[0] * (0.3 + 0.7 * min(p, 1.5))
-        ty = H / 2 - ay * s + self.shake[1] * (0.3 + 0.7 * min(p, 1.5))
+        tx = W / 2 - ax * s + self.shake[0] * (0.3 + 0.7 * min(p, 1.5)) - self.pan
+        ty = H / 2 - ay * s + self.shake[1] * (0.3 + 0.7 * min(p, 1.5)) + self.tilt
         return s, tx, ty
 
     def pt(self, X, Y, p=1.0):

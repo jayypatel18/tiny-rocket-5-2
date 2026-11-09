@@ -25,7 +25,7 @@ def paper():
     return bg
 
 
-def sheet(path, tod="dusk"):
+def sheet(path, tod="morning"):
     t0 = time.time()
     bg = paper()
     cel = core.Cel()
@@ -41,7 +41,7 @@ def sheet(path, tod="dusk"):
     strip = core.Cel()
     for k, name in enumerate(names):
         cx = 165 + 318 * k
-        ps = panda.replace(Pz[name], yaw=0.0, paw_l=None, paw_r=None, lean=0.0)
+        ps = panda.replace(Pz[name], yaw=0.0, paw_l=None, paw_r=None, lean=0.0, tail=((0, 40), (0, 50), (0, 60), (0, 70)))
         panda.draw(strip, ps, cx, 598 + 121 * s, s, tod, drawing=10 + k)
     lay = strip.rgba()
     lay[716:] = 0
@@ -49,7 +49,7 @@ def sheet(path, tod="dusk"):
     core.over(bg, lay)
     # actions, bottom row
     cel = core.Cel()
-    panda.draw(cel, Pz["sleep"], 250, 1045, 3.0, "night", drawing=20)
+    panda.draw(cel, Pz["sleep"], 250, 1045, 3.0, "dusk", drawing=20)
     panda.draw(cel, Pz["wind"], 760, 1262, 3.0, "sunrise", drawing=21)
     panda.draw(cel, Pz["wonder"], 1190, 1262, 3.0, "sunrise", drawing=22,
                light=dict(color=(1.0, 0.85, 0.5), dir=(0.8, 0.2), amount=0.6))
@@ -67,8 +67,8 @@ def closeup(path, tod="dusk", drawing=0):
     bg = palette.sky_color(tod, v).copy()
     n = core.fbm(core.H, core.W, 500, 4, seed=3) - 0.5
     bg += n[..., None] * 0.06
-    s = 6.5
-    x, y = 860.0, 1232.0
+    s = 7.2
+    x, y = 900.0, 1322.0
     pose = panda.POSES["tie_knot"]
     cel = core.Cel()
     ink = palette.TOD[tod]["ink"]
@@ -88,7 +88,7 @@ def closeup(path, tod="dusk", drawing=0):
         cel.stroke(np.array([c + nrm, c + d * 5 - nrm * 0.0, c - nrm]), 3.2, ink, seed=3)
     # string lashing round the strut
     strc = palette.lit(palette.ROCKET["string"], tod)
-    knot = np.array([x + 51.5 * s, y - 77 * s])
+    knot = np.array([x + 52.6 * s, y - 80 * s])
     for j in range(5):
         c = knot + d * (j - 2) * 2.3 * s
         cel.stroke(np.array([c + nrm * 1.08 + d * 3, c - nrm * 1.08 - d * 3]), 0.22 * s * 6.5, ink)
@@ -97,8 +97,8 @@ def closeup(path, tod="dusk", drawing=0):
     # the string: from the knot up to the teeth, and the short end in the pulling paw
     m = an["mouth_r"]
     pl = an["paw_l"]
-    for pts in (core.catmull([knot, (knot + m) / 2 + np.array([10, 14]), m], 10, closed=False),
-                core.catmull([knot, (knot + pl) / 2 + np.array([0, 10]), pl + np.array([4, -6])], 10, closed=False)):
+    for pts in (np.array([knot, knot + (m - knot) * 0.5 + np.array([0.5, 1.0]), m]),
+                np.array([knot, pl + np.array([2.0, -3.0]) * s, pl + np.array([-9.0, 3.0]) * s])):
         cel.stroke(pts, 7.5, ink, taper=(0.0, 0.0))
         cel.stroke(pts, 4.6, strc, taper=(0.0, 0.0))
     core.over(bg, cel.rgba())

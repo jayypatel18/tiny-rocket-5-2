@@ -19,7 +19,7 @@ from tr2 import core, palette
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "build", "cache", "sky")
 os.makedirs(CACHE, exist_ok=True)
-VERSION = 4
+VERSION = 7
 
 
 def cached(name, make):
@@ -239,7 +239,7 @@ def _puffs(r, w, h, kind):
     return p, base
 
 
-SIZES = {"cumulus": (960, 540), "tower": (720, 760), "bar": (1400, 380), "wisp": (1300, 300)}
+SIZES = {"cumulus": (960, 540), "tower": (720, 760), "bar": (1400, 380), "wisp": (1300, 300), "band": (1600, 170)}
 
 
 def cloud_fields(kind, seed, z=0.0):
@@ -264,6 +264,23 @@ def cloud_fields(kind, seed, z=0.0):
         under = ss(0.45, 0.8, yy / h) * 0.6
         return np.stack([a, np.clip(light, 0, 1), under], -1).astype(np.float32)
 
+    if kind == "band":
+        # a far, thin, long bank near the horizon: lit along its top edge
+        n1 = core.fbm(h, w, 46, 5, sd + 1, aspect=11.0, z=z)
+        n2 = core.fbm(h, w, 15, 3, sd + 2, aspect=7.0, z=z)
+        lump = core.fbm(h, w, 60, 3, sd + 3, aspect=3.0, z=z)
+        mid = h * 0.52 + (xx / w - 0.5) * r.uniform(-0.25, 0.25) * h + (lump - 0.5) * h * 0.25
+        ex = ss(0.0, 0.32, xx / w) * ss(0.0, 0.32, 1 - xx / w)
+        thick = h * (0.07 + 0.16 * ex * (0.4 + lump))
+        d = (yy - mid) / thick
+        body = np.exp(-np.abs(d) ** 2.2) * ex ** 0.5
+        a = ss(0.30, 0.62, body * (0.55 + 0.9 * n1) + 0.25 * (n2 - 0.5))
+        a = ndimage.gaussian_filter(a, 1.0)
+        a *= 1 - 0.45 * ss(0.2, 1.0, d) * ss(0.4, 0.7, n2)          # underside breaks up
+        light = 0.47 + 0.42 * ss(0.3, -0.9, d) - 0.18 * ss(0.0, 1.2, d) + 0.20 * (n2 - 0.5) + 0.16 * (lump - 0.5)
+        under = ss(0.0, 1.0, d)
+        return np.stack([a, np.clip(light, 0, 1), under], -1).astype(np.float32)
+
     p, base = _puffs(r, w, h, kind)
     # domain warp: billows on the outline at three sizes
     S = h / 540.0 if kind != "bar" else 1.0
@@ -271,8 +288,8 @@ def cloud_fields(kind, seed, z=0.0):
     wy = (core.fbm(h, w, 130 * S, 3, sd + 4, z=z) - 0.5) * 44 * S
     wx += (core.fbm(h, w, 34 * S, 3, sd + 5, z=z) - 0.5) * 20 * S
     wy += (core.fbm(h, w, 34 * S, 3, sd + 6, z=z) - 0.5) * 20 * S
-    wx += (core.fbm(h, w, 9 * S, 2, sd + 7, z=z) - 0.5) * 5 * S
-    wy += (core.fbm(h, w, 9 * S, 2, sd + 8, z=z) - 0.5) * 5 * S
+    wx += (core.fbm(h, w, 12 * S, 2, sd + 7, z=z) - 0.5) * 3 * S
+    wy += (core.fbm(h, w, 12 * S, 2, sd + 8, z=z) - 0.5) * 3 * S
     X = xx + wx
     Y = yy + wy
     zf = np.zeros((h, w), np.float32)
@@ -287,16 +304,23 @@ def cloud_fields(kind, seed, z=0.0):
         zz = np.sqrt(np.maximum(R * R - d2, 0.0))
         zz = np.where(zz > 0, zz + z0, 0.0)
         np.maximum(zf[y0:y1, x0:x1], zz, out=zf[y0:y1, x0:x1])
-    # flat, slightly ragged base
-    bw = (core.fbm(h, w, 150, 4, sd + 9, aspect=2.5) - 0.5) * 70 * S
-    cut = 1 - ss(base - 30 * S + bw, base + 12 * S + bw, yy)
-    zf *= cut
-    a = ss(0.5, 5.0 * S, zf)
-    # softer, dry brushed edge low on the shadow side
-    low = ss(base - 70 * S, base, yy)
+    # the base: gently curved, broken, melting into haze, trailing wisps
+    bxn = (xx - w / 2) / (w / 2)
+    bw = (core.fbm(h, w, 210, 4, sd + 9, aspect=2.0) - 0.5) * 70 * S
+    base_l = base - 14 * S + r.uniform(-34, 22) * S * bxn * bxn + r.uniform(-16, 16) * S * bxn + bw
     fine = core.fbm(h, w, 7, 2, sd + 10)
-    a = a * (1 - low * 0.5 * ss(0.35, 0.75, fine) * (1 - ss(6 * S, 26 * S, zf)))
-    # form light from the union of spheres
+    comb = core.fbm(h, w, 34 * S, 4, sd + 13, aspect=7.0)
+    comb = 1 - np.abs(2 * comb - 1)
+    mb = (88 if kind != "bar" else 46) * S
+    melt = 1 - ss(base_l - mb, base_l + 16 * S, yy + (comb - 0.5) * 70 * S)
+    melt = np.clip(melt * (1.0 + 1.3 * (comb - 0.5) * (1 - melt) * 2.0), 0, 1)
+    edge = ndimage.gaussian_filter(ss(0.5, 7.0 * S, zf), 0.9)
+    a = edge * melt
+    # wisps drifting off the base, past the silhouette
+    span = ndimage.gaussian_filter((edge.max(0) > 0.5).astype(np.float32), 40 * S)[None, :]
+    wis = ss(0.60, 0.92, comb + 0.25 * (fine - 0.5)) * np.exp(-((yy - base_l + 26 * S) / (30 * S)) ** 2) * span
+    a = np.clip(np.maximum(a, wis * 0.55), 0, 1)
+    a *= 1 - 0.35 * ss(0.4, 0.75, fine) * (1 - melt) * (1 - ss(6 * S, 26 * S, zf))
     # two scales: the big masses carry the light, the small lumps only break it
     lx, ly, lz = 0.60, -0.62, 0.50
     lam = 0.0
@@ -314,9 +338,11 @@ def cloud_fields(kind, seed, z=0.0):
         mass += _shift(ab, -int(round(lx * step * s)), -int(round(ly * step * s))) * (1.0 - s / 18.0)
     trans = np.exp(-mass * 0.11)
     under = ss(base - (230 if kind != "bar" else 110) * S, base - 4 * S, yy) ** 1.6
-    light = 0.12 + 0.66 * np.clip(lam, 0, 1) * (0.5 + 0.5 * trans) + 0.24 * trans - 0.20 * under * (1 - 0.5 * trans)
-    # a thin bounce of light on the very bottom lumps
-    light += 0.10 * ss(base - 26 * S, base - 4 * S, yy) * (1 - ss(0, 30 * S, zf))
+    light = 0.17 + 0.66 * np.clip(lam, 0, 1) * (0.5 + 0.5 * trans) + 0.24 * trans - 0.10 * under * (1 - 0.5 * trans)
+    # the melting base goes to one quiet haze tone, never a dark fringe
+    mz = np.clip((1 - melt) * 1.2, 0, 1) * 0.85
+    light = light * (1 - mz) + 0.33 * mz
+    light = np.where(edge < 0.5, 0.36, light)
     # brush: tonal planes get stroke shaped borders
     sf = stroke_field(h, w, int(w * h / 900), (40 * S, 130 * S), (10 * S, 30 * S), angle=-0.5, spread=0.7,
                       seed=sd + 11, opacity=0.8)
@@ -330,7 +356,7 @@ def cloud_sprite(kind, seed, z=0.0):
     return cached(name, lambda: cloud_fields(kind, seed, z).astype(np.float16)).astype(np.float32)
 
 
-def tones(tod, sky_c=None, haze=0.0, strength=1.0):
+def tones(tod, sky_c=None, haze=0.0, strength=1.0, tint=None):
     """The five cloud tones (deep, shadow, turn, lit, highlight) in this light.
     sky_c: sky colour behind the cloud; haze 0..1 pulls every tone toward it."""
     t = palette.TOD[tod] if isinstance(tod, str) else tod
@@ -339,12 +365,13 @@ def tones(tod, sky_c=None, haze=0.0, strength=1.0):
     lum = float(key.mean())
     lit = np.clip(white * key / max(1.0, float(key.max())) * min(1.0, 0.55 + 0.6 * lum), 0, 1)
     hi = np.clip(palette.mix(lit, rimc, 0.35) * 1.10 + 0.05 * lum, 0, 1)
-    sh = white * amb * (0.86 + 0.5 * lum * 0.3)
+    warm = key / float(key.max())
+    sh = white * amb * (0.92 + 0.5 * lum * 0.3) * (0.80 + 0.30 * warm)
     if sky_c is not None:
-        sh = palette.mix(sh, sky_c, 0.42)
+        sh = palette.mix(sh, sky_c, 0.40)
     g = sh.mean()
-    sh = np.clip(g + (sh - g) * 1.25, 0, 1)
-    deep = np.clip(sh * np.array([0.83, 0.82, 0.92], np.float32), 0, 1)
+    sh = np.clip(g + (sh - g) * 1.15, 0, 1)
+    deep = np.clip(sh * np.array([0.88, 0.86, 0.93], np.float32), 0, 1)
     turn = palette.mix(lit, sh, 0.52) * np.array([1.10, 0.93, 0.95], np.float32)
     cols = [deep, sh, np.clip(turn, 0, 1), lit, hi]
     if sky_c is not None and haze > 0:
@@ -352,6 +379,8 @@ def tones(tod, sky_c=None, haze=0.0, strength=1.0):
     if strength < 1.0:
         mid = cols[2]
         cols = [palette.mix(mid, c, strength) for c in cols]
+    if tint is not None:
+        cols = [np.clip(c * np.asarray(tint, np.float32), 0, 1) for c in cols]
     return [np.asarray(c, np.float32) for c in cols]
 
 

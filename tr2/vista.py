@@ -1,335 +1,88 @@
 """Shot 8: the climax vista. Very far and very high at sunrise: the curve of
-the world, a sea of clouds in perspective, mountains as islands, rivers and a
-lake through the gaps, the sun just risen at lower right.
+the world, a sea of clouds in perspective, mountains as islands, a river and a
+lake through gaps in the floor, the sun just risen at lower right.
 
     pic = vista.render(cam, f, t)      # float RGB 1080 x 1920, no shooting star
 
-How it is built. The world is two height fields in real perspective: the
-ground (valley floor, mountains, water) and a floating slab of cloud with
-billowed tops and holes. Both are baked once on a (depth slice, screen column)
-grid, lit by a low sun with long marched shadows, coloured in gouache tones,
-repainted with brush strokes, then drawn front to back each frame. Every depth
-slice has its own parallax, so a push in or drift moves hundreds of layers.
-Default camera: core.Camera() (centre 960, 540). cam.dolly pushes in,
-cam.cx / cam.cy drift, cam.zoom scales.
+Built back to front, all painted once and cached, then placed every frame
+through the camera, each layer with its own parallax (about 30 layers):
+  sky (curved gradient, sun, stars)  ->  cloud floor in perspective, with the
+  two gaps (dark land, river)  ->  rows of cumulus tops from the horizon to
+  the lens, each row larger, mountains slotted between the rows by depth  ->
+  air: haze on the horizon, the thin line of atmosphere, sun bloom.
+Use the default core.Camera() (centre 960, 540): cam.dolly pushes in,
+cam.cx / cam.cy drift (px on the near cloud plane), cam.zoom scales.
 """
 import math
 
 import numpy as np
-from numba import njit, prange
+from numba import njit
+from scipy import ndimage
 
 from tr2 import core, palette
 from tr2 import sky_paint as sp
 
 W, H = core.W, core.H
-VERSION = 5
+VERSION = 10
 F = 1150.0            # focal length in px
-HZ = 590.0            # horizon line at screen centre
-CURVE = 44.0          # how far the horizon drops at the frame edges (px)
-XC = 1010.0           # where the curve of the world crests
-NA, ND = 2304, 760    # baked grid: columns (with pan margin), depth slices
-Z0, Z1 = 1.9, 230.0   # nearest and farthest slice (camera height = 1)
-CAMH = 1.0
-TH = 0.75             # thickness of the cloud slab
-GD = 2.7              # the valley floor lies this far under the cloud tops
-SUN_X = 1395.0        # sun on screen
-A_SUN = (SUN_X - 960.0) / F
-LSUN = np.array([0.36, 0.17, 0.92])
-LSUN = LSUN / np.linalg.norm(LSUN)
-T = palette.TOD["sunrise"]
+HZ = 598.0            # horizon at the crest of the curve
+CURVE = 42.0          # how far the horizon drops at the frame edges (px)
+XC = 1000.0           # where the curve of the world crests
+M = 192               # margin of the painted canvas, for drift
+CW = W + 2 * M
+SUN_X = 1395.0
+S0 = 1.55
+SQUASH = 0.62         # cloud lumps are flattened, seen from above             # cloud sprite scale at depth 1
+
+# cloud tones for this shot: the floor is light, the shadows mid lavender
+DEEP = np.array([0.55, 0.54, 0.80], np.float32)
+SHAD = np.array([0.69, 0.64, 0.85], np.float32)
+TURN = np.array([0.95, 0.72, 0.72], np.float32)
+LIT = np.array([1.00, 0.87, 0.68], np.float32)
+HI = np.array([1.00, 0.96, 0.84], np.float32)
+
+# gaps in the floor: (screen x, screen y, half width, half height)
+GAPS = [(640.0, 768.0, 215.0, 46.0), (1215.0, 700.0, 135.0, 24.0)]
+# mountains: (screen x of the middle, y of the cloud line at its foot, width px, height px, seed)
+MOUNTAINS = [(470.0, 690.0, 430.0, 122.0, 1), (890.0, 652.0, 210.0, 54.0, 2), (1620.0, 668.0, 270.0, 74.0, 3),
+             (215.0, 630.0, 260.0, 32.0, 4)]
 
 
-def _grid():
-    k = np.arange(ND)
-    z = Z0 * (Z1 / Z0) ** (k / (ND - 1.0))
-    a = (np.arange(NA) - NA / 2 + 0.5) / F
-    return z, a
+def hz_at(x):
+    """The horizon line: the curve of the world."""
+    return HZ + CURVE * ((np.asarray(x, np.float32) - XC) / 960.0) ** 2
 
 
-def _n(X, Z, scale, octv, seed):
-    return core.fbm_at(X, Z, scale, octv, seed).reshape(X.shape).astype(np.float32)
+def _sunward(x, wid=560.0):
+    return np.exp(-((np.asarray(x, np.float32) - SUN_X) / wid) ** 2)
 
 
-# mountains: (screen x at the cloud tops, depth, half width, half depth, height above the cloud tops, seed)
-MOUNTAINS = [
-    (470.0, 10.5, 2.6, 1.5, 1.35, 1),     # the big island, left of centre
-    (250.0, 14.0, 2.2, 1.6, 1.0, 2),
-    (760.0, 15.0, 1.8, 1.4, 0.8, 3),
-    (1700.0, 5.6, 1.15, 0.8, 0.95, 4),    # near peak, lower right, against the sun
-    (1040.0, 46.0, 10.0, 4.0, 2.7, 5),    # far range left of the sun
-    (1700.0, 60.0, 9.0, 5.0, 2.6, 6),     # far range right
-    (120.0, 34.0, 7.0, 4.0, 2.4, 7),
-    (640.0, 90.0, 22.0, 8.0, 3.6, 8),     # the farthest, pale
-    (1500.0, 120.0, 30.0, 10.0, 3.8, 9),
-]
-# holes in the cloud: (screen x, depth of the hole in the cloud, half width, half depth)
-GAPS = [(600.0, 6.3, 2.1, 1.25), (1180.0, 12.5, 2.6, 1.9), (150.0, 5.0, 1.0, 0.7), (1500.0, 24.0, 5.0, 3.0)]
+def _fog(x):
+    s = _sunward(x)[..., None]
+    return np.array([0.94, 0.75, 0.79], np.float32) * (1 - s) + np.array([1.0, 0.91, 0.72], np.float32) * s
 
 
-def _heights(X, Z):
-    """World height fields at points: cloud top, cloud presence, ground."""
-    wx = (_n(X, Z, 4.0, 3, 11) - 0.5) * 1.6
-    wz = (_n(X, Z, 4.0, 3, 12) - 0.5) * 1.6
-    Xw, Zw = X + wx, Z + wz
-    cover = _n(Xw, Zw * 1.25, 5.0, 4, 1)
-    cover = cover + 0.30 * sp.ss(4.2, 2.6, Z) + 0.10 * sp.ss(30.0, 80.0, Z)
-    gap = np.zeros_like(X)
-    for (sx, zc, rx, rz) in GAPS:
-        xc = (sx - 960.0) / F * zc
-        gap = np.maximum(gap, np.exp(-(((Xw - xc) / rx) ** 2 + ((Zw - zc) / rz) ** 2) ** 1.5))
-    cover = cover - 0.75 * gap
-    e = sp.ss(0.34, 0.50, cover)
-    b1 = np.abs(2 * _n(Xw, Zw, 1.25, 5, 2) - 1)                 # small cauliflower tops
-    b2 = np.abs(2 * _n(Xw * 0.8, Zw, 3.6, 4, 3) - 1)            # the big banks
-    tower = sp.ss(0.60, 0.80, _n(X, Z, 8.0, 3, 9))
-    top = 0.95 * b2 + 0.42 * b1 * (0.5 + b2) + tower * (0.7 + 1.1 * b1) - 0.30
-    hc = -TH + (TH + top) * e ** 0.55
-    # ground
-    g = -GD + 0.35 * (_n(X, Z, 6.0, 4, 21) - 0.5)
-    for (sx, zc, rx, rz, hh, sd) in MOUNTAINS:
-        xc = (sx - 960.0) / F * zc
-        d2 = ((X - xc) / rx) ** 2 + ((Z - zc) / rz) ** 2
-        env = np.exp(-d2 * 1.2)
-        sc = max(0.5, rx * 0.55)
-        wxm = (_n(X, Z, sc * 0.8, 3, 40 + sd) - 0.5) * sc * 0.5
-        r1 = 1 - np.abs(2 * _n(X + wxm, Z * 1.3, sc, 5, 30 + sd) - 1)
-        r2 = 1 - np.abs(2 * _n(X * 1.3 - wxm, Z * 1.6, sc * 0.32, 4, 50 + sd) - 1)
-        m = (GD + hh) * env ** 0.8 * (0.30 + 0.55 * r1 ** 1.6 + 0.15 * r2)
-        g = np.maximum(g, -GD + m)
-    return hc, e, g
+def _fz(z):
+    return 1 - np.exp(-np.maximum(np.asarray(z, np.float32) - 2.5, 0) / 20.0)
 
 
-@njit(cache=True, fastmath=True, parallel=True)
-def _shadow(hs, zs, avals, lx, ly, lz, out):
-    nd, na = hs.shape
-    lz0 = math.log(zs[0])
-    lzr = (nd - 1) / (math.log(zs[nd - 1]) - lz0)
-    a0 = avals[0]
-    da = avals[1] - avals[0]
-    for k in prange(nd):
-        z = zs[k]
-        for i in range(na):
-            X = avals[i] * z
-            y = hs[k, i]
-            sh = 0.0
-            d = 0.04 * z ** 0.5
-            for s in range(46):
-                d *= 1.11
-                Zp = z + lz * d
-                Xp = X + lx * d
-                Yp = y + ly * d
-                kk = int((math.log(Zp) - lz0) * lzr + 0.5)
-                ii = int((Xp / Zp - a0) / da + 0.5)
-                if kk >= nd or ii < 0 or ii >= na:
-                    break
-                over = hs[kk, ii] - Yp
-                if over > 0:
-                    q = over / (0.06 + 0.05 * d)
-                    if q > sh:
-                        sh = q
-                    if sh >= 1.0:
-                        break
-            out[k, i] = min(sh, 1.0)
-
-
-def _bake():
-    z, a = _grid()
-    Zg = np.repeat(z[:, None], NA, 1)
-    Xg = a[None, :] * z[:, None]
-    hc, e, g = _heights(Xg, Zg)
-    # normals by finite differences in the world
-    eps = np.maximum(0.05, Zg / F * 1.5)
-    hcx, _, gx = _heights(Xg + eps, Zg)
-    hcz, _, gz = _heights(Xg, Zg + eps)
-    lx, ly, lz = LSUN
-
-    def lamb(h0, hx, hz, k=1.0):
-        dx = (hx - h0) / eps
-        dz = (hz - h0) / eps
-        n = np.sqrt(dx * dx + dz * dz + k * k)
-        return (-dx * lx + k * ly - dz * lz) / n, dx, dz, n
-
-    hs = np.maximum(np.where(e > 0.02, hc, -99.0), g).astype(np.float32)
-    shd = np.zeros((ND, NA), np.float32)
-    _shadow(hs, z, a, lx, ly, lz, shd)
-    shd = core.gblur(shd, 1.2)
-
-    sunward = np.exp(-((a[None, :] - A_SUN) / 0.42) ** 2).astype(np.float32) * np.ones((ND, 1), np.float32)
-    fogz = (1 - np.exp(-np.maximum(Zg - 2.5, 0) / 42.0)).astype(np.float32)
-    fog_far = palette.mix(np.array([0.95, 0.70, 0.68]), np.array([1.0, 0.88, 0.64]), 1.0)
-    fogc = (np.array([0.90, 0.68, 0.72], np.float32)[None, None, :] * (1 - sunward[..., None])
-            + np.array([1.0, 0.86, 0.62], np.float32)[None, None, :] * sunward[..., None])
-
-    # ---- cloud tone
-    lam, dx, dz, nn = lamb(hc, hcx, hcz, 0.55)
-    lam = np.clip(lam * 1.5 + 0.12, 0, 1)
-    crest = np.clip(core.gblur(hc, 6.0) * -1 + hc, -0.3, 0.3) / 0.3      # above the local mean = a top
-    strokes = sp.stroke_field(ND, NA, 26000, (30, 120), (5, 16), 0.0, 0.35, seed=5, opacity=0.8)
-    Lc = 0.16 + 0.62 * lam * (1 - 0.85 * shd) + 0.16 * np.clip(crest, 0, 1) * (1 - 0.6 * shd) \
-        - 0.12 * np.clip(-crest, 0, 1) + 0.07 * strokes
-    Lc += 0.14 * sunward * (1 - shd) * lam
-    Lc = np.clip(Lc, 0, 1)
-    skyc = np.array([0.80, 0.62, 0.74], np.float32)
-    cols = sp.tones("sunrise", skyc, 0.0)
-    deep, sh, turn, lit, hi = cols
-    deep = np.array([0.30, 0.31, 0.56], np.float32)
-    sh = np.array([0.50, 0.46, 0.70], np.float32)
-    turn = np.array([0.90, 0.60, 0.62], np.float32)
-    lit = np.array([1.0, 0.84, 0.62], np.float32)
-    hi = np.array([1.0, 0.96, 0.82], np.float32)
-    c = deep + (sh - deep) * sp.ss(0.10, 0.26, Lc)[..., None]
-    c += (turn - c) * sp.ss(0.34, 0.44, Lc)[..., None]
-    c += (lit - c) * sp.ss(0.50, 0.60, Lc)[..., None]
-    c += (hi - c) * sp.ss(0.74, 0.86, Lc)[..., None]
-    ccol = c * (1 - fogz[..., None]) + fogc * fogz[..., None]
-    ccol = sp.repaint(ccol, 30000, (26, 90), (4, 12), 0.0, 0.3, seed=7, opacity=0.8, jitter=0.012)
-    wall = palette.mix(deep, sh, 0.35)
-    cwall = wall[None, None, :] * (1 - fogz[..., None]) + fogc * fogz[..., None]
-
-    # ---- ground: rock, snow, valley, water
-    lamg, dxg, dzg, ng = lamb(g, gx, gz, 1.0)
-    slope = np.sqrt(dxg * dxg + dzg * dzg)
-    lamg = np.clip(lamg * 1.4 + 0.1, 0, 1)
-    rockn = _n(Xg * 3.0, Zg * 3.0 + g * 8.0, 1.0, 4, 61)
-    snow_line = 0.25 + 0.5 * (rockn - 0.5)
-    snow = sp.ss(snow_line, snow_line + 0.22, g) * sp.ss(2.6, 1.2, slope + 0.8 * (rockn - 0.5))
-    litg = lamg * (1 - 0.9 * shd)
-    rock_l = np.array([0.74, 0.47, 0.40], np.float32)
-    rock_s = np.array([0.24, 0.20, 0.38], np.float32)
-    rock_d = np.array([0.15, 0.13, 0.28], np.float32)
-    snow_l = np.array([1.0, 0.86, 0.78], np.float32)
-    snow_s = np.array([0.46, 0.48, 0.76], np.float32)
-    lt = sp.ss(0.30, 0.42, litg + 0.10 * (strokes))[..., None]
-    rock = rock_d + (rock_s - rock_d) * sp.ss(0.05, 0.2, lamg + 0.3 * rockn)[..., None]
-    rock = rock + (rock_l - rock) * lt
-    sn = snow_s + (snow_l - snow_s) * lt
-    gcol = rock + (sn - rock) * snow[..., None]
-    # valley floor far below: fields, forest, in blue air
-    low = sp.ss(-GD + 0.9, -GD + 0.25, g)
-    fld = _n(Xg, Zg, 1.6, 4, 71)
-    patch = _n(Xg * 2.0, Zg * 2.0, 0.5, 2, 72)
-    land = np.array([0.20, 0.27, 0.40], np.float32)[None, None, :] * (0.8 + 0.5 * fld[..., None]) \
-        + np.array([0.10, 0.06, -0.02], np.float32) * sp.ss(0.5, 0.6, patch)[..., None]
-    land = land * (0.75 + 0.5 * (1 - shd[..., None] * 0.6))
-    gcol = gcol + (land - gcol) * low[..., None]
-    # rivers and a lake: they mirror the sky, and blaze toward the sun
-    ang = Xg / Zg
-    r1 = (GAPS[0][0] - 960.0) / F + 0.085 * np.sin(Zg * 0.31 + 0.6) + 0.03 * np.sin(Zg * 0.83)
-    w1 = (0.11 + 0.05 * np.sin(Zg * 0.5)) / Zg
-    riv = sp.ss(w1 * 1.25, w1 * 0.75, np.abs(ang - r1))
-    lake = sp.ss(1.15, 0.85, np.sqrt(((Xg - (r1 * Zg + 0.2)) / 1.5) ** 2 + ((Zg - 21.0) / 2.6) ** 2)
-                 + 0.35 * (fld - 0.5))
-    r2 = (GAPS[1][0] - 960.0) / F - 0.02 + 0.05 * np.sin(Zg * 0.17 + 2.0) + 0.02 * np.sin(Zg * 0.5)
-    w2 = (0.16 + 0.06 * np.sin(Zg * 0.3)) / Zg
-    riv2 = sp.ss(w2 * 1.25, w2 * 0.75, np.abs(ang - r2))
-    r3 = (GAPS[3][0] - 960.0) / F + 0.04 * np.sin(Zg * 0.09 + 1.0)
-    riv3 = sp.ss(0.26 / Zg * 1.25, 0.26 / Zg * 0.75, np.abs(ang - r3))
-    water = np.maximum(np.maximum(riv, lake), np.maximum(riv2, riv3)) * low
-    wcol = (np.array([0.66, 0.70, 0.92], np.float32)[None, None, :] * (1 - sunward[..., None])
-            + np.array([1.0, 0.93, 0.70], np.float32)[None, None, :] * sunward[..., None])
-    wcol = wcol * (0.92 + 0.16 * patch[..., None])
-    gcol = gcol + (wcol - gcol) * water[..., None]
-    # air: the valley sits in deep blue haze, the far ranges fade to rose
-    depth_air = sp.ss(0.0, -GD, g)[..., None] * 0.42
-    gcol = gcol * (1 - depth_air) + np.array([0.34, 0.40, 0.66], np.float32) * depth_air * (1 - 0.6 * water[..., None]) \
-        + gcol * depth_air * 0.6 * water[..., None]
-    gcol = gcol * (1 - fogz[..., None]) + fogc * fogz[..., None]
-    gcol = sp.repaint(gcol.astype(np.float32), 26000, (16, 60), (3, 9), 0.5, 0.6, seed=9, opacity=0.75, jitter=0.012)
-    gcol = gcol + (wcol * (1 - fogz[..., None] * 0.5) - gcol) * (water[..., None] * 0.85)
-
-    out = np.concatenate([np.where(e > 0.02, hc, -99.0)[..., None], g[..., None], ccol, cwall, gcol], -1)
-    return out.astype(np.float32)
-
-
-@njit(cache=True, fastmath=True, parallel=True)
-def _march(out, alpha, B, zs, hzrow, f, camh, th, sk, pxk, pyk):
-    """Front to back. B channels: 0 cloud top, 1 ground, 2:5 cloud colour,
-    5:8 cloud wall colour, 8:11 ground colour."""
-    h, w, _ = out.shape
-    nd, na, _ = B.shape
-    for i in prange(w):
-        ygr = h          # everything from here down is ground or filled
-        for k in range(nd):
-            z = zs[k]
-            s = sk[k]
-            ai = int(na * 0.5 + (i + 0.5 - w * 0.5) / s + pxk[k])
-            if ai < 0 or ai >= na:
-                continue
-            hz = hzrow[ai]
-            base = (hz - h * 0.5) * s + h * 0.5 - pyk[k]
-            sc = f * s / z
-            # ground
-            yg = int(base + (camh - B[k, ai, 1]) * sc)
-            if yg < ygr:
-                y0 = max(yg, 0)
-                for y in range(y0, ygr):
-                    if alpha[y, i] == 0.0:
-                        alpha[y, i] = 1.0
-                        out[y, i, 0] = B[k, ai, 8]
-                        out[y, i, 1] = B[k, ai, 9]
-                        out[y, i, 2] = B[k, ai, 10]
-                ygr = y0
-            if ygr <= 0:
-                break
-            # cloud slab
-            ct = B[k, ai, 0]
-            if ct > -50.0:
-                yt = int(base + (camh - ct) * sc)
-                yb = int(base + (camh + th) * sc) + 1
-                if yb > ygr:
-                    yb = ygr
-                cap = 0.16 * sc + 2.0
-                for y in range(max(yt, 0), yb):
-                    if alpha[y, i] == 0.0:
-                        alpha[y, i] = 1.0
-                        q = (y - yt) / cap
-                        if q > 1.0:
-                            q = 1.0
-                        q = q * q * (3 - 2 * q)
-                        out[y, i, 0] = B[k, ai, 2] * (1 - q) + B[k, ai, 5] * q
-                        out[y, i, 1] = B[k, ai, 3] * (1 - q) + B[k, ai, 6] * q
-                        out[y, i, 2] = B[k, ai, 4] * (1 - q) + B[k, ai, 7] * q
-
-
-_B = None
-_SKY = None
-
-
-def _bakeload():
-    global _B
-    if _B is None:
-        _B = sp.cached("vista_bake_v%d" % VERSION, lambda: _bake().astype(np.float16)).astype(np.float32)
-    return _B
-
-
-def _hz_at(x):
-    return HZ + CURVE * ((x - XC) / 960.0) ** 2
-
-
+# ------------------------------------------------------------------ the sky
 def _sky():
-    """The static painted sky: gradient that follows the curve of the world,
-    the sun, the thin line of atmosphere. Larger than the screen for drift."""
-    global _SKY
-    if _SKY is not None:
-        return _SKY
-
     def make():
-        m = 160
-        hh, ww = H + 2 * m, W + 2 * m
+        hh, ww = H + 2 * M, CW
         yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float32)
-        xx -= m
-        yy -= m
-        hz = _hz_at(xx)
+        xx -= M
+        yy -= M
+        hz = hz_at(xx)
         st = sp.stroke_field(hh, ww, 2400, (300, 900), (30, 90), 0.0, 0.06, seed=3, opacity=0.9)
         st2 = sp.stroke_field(hh, ww, 5000, (100, 380), (12, 36), 0.0, 0.12, seed=4, opacity=0.75)
-        v = np.clip((yy + m) / (hz + m), 0, 1.2)
+        v = np.clip((yy + M) / (hz + M), 0, 1.2)
         v = v ** 1.9 + (0.030 * st + 0.018 * st2) * (0.3 + 0.7 * v)
         pic = palette.sky_color("sunrise", np.clip(v, 0, 1))
-        top = sp.ss(0.42, 0.0, (yy + m) / (hz + m))[..., None]
+        top = sp.ss(0.42, 0.0, (yy + M) / (hz + M))[..., None]
         pic = pic * (1 - 0.42 * top)                                  # deeper toward space
         pic *= 1.0 + 0.022 * st2[..., None]
-        # sun
-        sx, sy = SUN_X, _hz_at(SUN_X) - 16.0
+        sx, sy = SUN_X, float(hz_at(SUN_X)) - 16.0
         d = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
         dw = np.sqrt(((xx - sx) * 0.40) ** 2 + (yy - sy) ** 2)
         g = 0.55 * np.exp(-d / 420.0) + 0.6 * np.exp(-(d / 150.0) ** 2) + 0.55 * np.exp(-dw / 120.0)
@@ -338,51 +91,321 @@ def _sky():
         disc = sp.ss(34.0, 30.0, d)
         pic = pic * (1 - disc[..., None]) + np.array([1.0, 0.99, 0.93], np.float32) * disc[..., None]
         return pic.astype(np.float16)
-    _SKY = sp.cached("vista_sky_v%d" % VERSION, make).astype(np.float32)
-    return _SKY
+    return sp.cached("vista_sky_v%d" % VERSION, make).astype(np.float32)
+
+
+# ------------------------------------------------------------ the cloud floor
+def _floor():
+    """Canvas (H - 560) x CW RGBA from y = 560 down: the cloud floor between
+    the lumps, in perspective, with long shadows and the two gaps."""
+    y0 = 560
+    hh = H + M - y0
+    yy, xx = np.mgrid[0:hh, 0:CW].astype(np.float32)
+    xx -= M
+    yy += y0
+    hz = hz_at(xx)
+    dy = np.maximum(yy - hz, 0.6)
+    z = F / dy
+    X = (xx - 960.0) / F * z
+    def n(a, b, sc, o, sd):
+        return core.fbm_at(a, b, sc, o, sd).reshape(a.shape).astype(np.float32)
+    big = n(X * 0.55, z, 2.6, 4, 101)
+    streak = n(X * 0.16 + z * 0.10, z, 0.55, 4, 102)       # long shadows lying to the left
+    fine = n(X * 0.5, z, 0.22, 3, 103)
+    lightv = 0.42 + 0.9 * (big - 0.5) + 0.75 * (streak - 0.5) + 0.2 * (fine - 0.5)
+    c = DEEP + (SHAD - DEEP) * sp.ss(0.22, 0.38, lightv)[..., None]
+    c = c + (TURN - c) * sp.ss(0.50, 0.60, lightv)[..., None] * 0.6
+    c = c + (LIT - c) * sp.ss(0.62, 0.72, lightv)[..., None]
+    fz = _fz(z)[..., None]
+    c = c * (1 - 0.9 * fz) + _fog(xx) * 0.9 * fz
+    c = sp.repaint(c.astype(np.float32), 9000, (40, 150), (5, 14), 0.0, 0.08, seed=21, opacity=0.7, jitter=0.01)
+    a = sp.ss(-1.0, 3.0, yy - hz)
+    # gaps: the far wall of the hole in shadow, then dark blue land far below
+    for gi, (gx, gy, rx, ry) in enumerate(GAPS):
+        wob = 0.95 * (n(xx, yy * 3.0, 150.0, 4, 110 + gi) - 0.5)
+        e1 = np.sqrt(((xx - gx) / rx) ** 2 + ((yy - gy) / ry) ** 2) + wob
+        hole = sp.ss(1.0, 0.88, e1)
+        wall_t = ry * 0.42
+        e2 = np.sqrt(((xx - gx) / rx) ** 2 + ((yy - gy - wall_t) / ry) ** 2) + wob
+        landm = sp.ss(1.0, 0.9, e2) * hole
+        fzg = float(_fz(F / (gy - HZ)))
+        wallc = palette.mix(np.array([0.47, 0.48, 0.77], np.float32), _fog(np.float32(gx)), fzg * 0.5)
+        c = c + (wallc - c) * hole[..., None]
+        ln = n(xx, yy * 4.0, 46.0, 4, 120 + gi)
+        pt = n(xx, yy * 4.0, 13.0, 2, 130 + gi)
+        land = np.array([0.20, 0.29, 0.50], np.float32) * (0.78 + 0.5 * ln[..., None]) \
+            + np.array([0.05, 0.05, -0.02], np.float32) * sp.ss(0.5, 0.58, pt)[..., None]
+        land = palette.mix(land, np.array([0.50, 0.52, 0.78], np.float32), 0.22 + 0.25 * fzg)
+        # the river: a thread that winds across the valley and glints gold
+        u = np.linspace(-1.15, 1.15, 260)
+        px = gx + u * rx
+        mnd = core.fbm_at(u * 2.2 + 5.0 * gi, u * 0 + 0.3, 1.0, 4, 140 + gi) - 0.5
+        py = gy + wall_t * 0.8 + ry * (2.1 * mnd + 0.10 * np.sin(u * 13.0 + 1.0) - 0.30 * u)
+        dmin = np.full(xx.shape, 1e9, np.float32)
+        sel = (np.abs(xx - gx) < rx * 1.3) & (np.abs(yy - gy) < ry * 2.6)
+        xs_, ys_ = xx[sel], yy[sel]
+        dm = np.full(xs_.shape, 1e9, np.float32)
+        for q in range(len(u)):
+            dm = np.minimum(dm, (xs_ - px[q]) ** 2 + ((ys_ - py[q]) * 2.6) ** 2)
+        dmin[sel] = np.sqrt(dm)
+        wr = 1.5 + 0.9 * np.sin(xx * 0.043 + 1.0)
+        riv = sp.ss(wr + 1.0, wr - 0.6, dmin)
+        if gi == 0:   # a small lake where the river slows
+            lq = int(np.argmin(np.abs(u + 0.42)))
+            lk = np.sqrt(((xx - px[lq]) / (rx * 0.17)) ** 2 + ((yy - py[lq]) / (ry * 0.20)) ** 2) \
+                + 1.1 * (n(xx, yy * 3.0, 40.0, 3, 150) - 0.5)
+            riv = np.maximum(riv, sp.ss(1.0, 0.86, lk))
+        glint = np.array([1.0, 0.92, 0.66], np.float32)
+        land = land + (glint - land) * riv[..., None]
+        land = land + 0.25 * np.exp(-(dmin / 7.0) ** 2)[..., None] * glint * (1 - riv[..., None])
+        c = c + (land - c) * landm[..., None]
+    return core.premul(np.clip(c, 0, 1).astype(np.float32), a.astype(np.float32)), y0
+
+
+# ---------------------------------------------------------------- mountains
+@njit(cache=True, fastmath=True)
+def _mrender(hf, col, out, yb0, sz, fade):
+    nz, nx = hf.shape
+    hh = out.shape[0]
+    for i in range(nx):
+        ybuf = hh
+        for k in range(nz - 1, -1, -1):          # front to back
+            y = int(yb0 + k * sz - hf[k, i])
+            if y < 0:
+                y = 0
+            if y < ybuf:
+                a = hf[k, i] / fade
+                if a > 1.0:
+                    a = 1.0
+                a = a * a * (3 - 2 * a)
+                for yy in range(y, ybuf):
+                    out[yy, i, 0] = col[k, i, 0] * a
+                    out[yy, i, 1] = col[k, i, 1] * a
+                    out[yy, i, 2] = col[k, i, 2] * a
+                    out[yy, i, 3] = a
+                ybuf = y
+
+
+def _mountain(wpx, hpx, seed, haze, fogc):
+    """An alpine massif as a small height field, lit by the low sun on the
+    right and behind, drawn in steep side view. Returns RGBA, foot at bottom."""
+    ssx = 2                               # paint at double size
+    nx, nz = int(wpx * ssx), 520
+    r = core.rng("mountain", seed)
+    X = np.linspace(-1, 1, nx)[None, :] * np.ones((nz, 1))
+    Zc = np.linspace(-1, 1, nz)[:, None] * np.ones((1, nx))
+    def n(a, b, sc, o, sd):
+        return core.fbm_at(a, b, sc, o, seed * 97 + sd).reshape(a.shape)
+    wx = (n(X, Zc, 0.7, 3, 1) - 0.5) * 0.5
+    wz = (n(X, Zc, 0.7, 3, 2) - 0.5) * 0.5
+    env = np.zeros_like(X)
+    for q in range(int(r.integers(2, 5))):
+        px, ph, pw = r.uniform(-0.5, 0.5), r.uniform(0.55, 1.0), r.uniform(0.28, 0.5)
+        env = np.maximum(env, ph * np.exp(-(((X - px) / pw) ** 2 + (Zc / 0.62) ** 2)))
+    env = np.maximum(env, 0.55 * np.exp(-((X / 0.75) ** 2 + (Zc / 0.7) ** 2) ** 1.5))
+    r1 = 1 - np.abs(2 * n(X * 1.0 + wx, Zc * 0.8 + wz, 0.62, 5, 3) - 1)
+    r2 = 1 - np.abs(2 * n(X + wx * 0.5, Zc * 0.8, 0.17, 4, 4) - 1)
+    hgt = env * (0.34 + 0.52 * r1 ** 1.4 + 0.14 * r2)
+    hgt = hgt / hgt.max()
+    hf = (hgt * hpx * ssx).astype(np.float64)
+    # light
+    dxw = 1.0
+    dzw = 0.55 * nx / nz
+    gz, gx = np.gradient(hf)
+    gx = gx / dxw
+    gzw = -gz / dzw                         # derivative toward the back
+    nn = np.sqrt(gx * gx + gzw * gzw + 1)
+    lam = (-gx * 0.74 + 0.40 - gzw * 0.54) / nn
+    tex = n(X * 3.0, Zc * 2.0 + hgt * 3.0, 0.12, 3, 5)
+    litf = sp.ss(0.30, 0.37, lam + 0.10 * (tex - 0.5))[..., None]
+    slope = np.sqrt(gx * gx + gzw * gzw)
+    snow = (sp.ss(0.30, 0.46, hgt + 0.25 * (tex - 0.5)) * sp.ss(2.9, 1.5, slope + 1.2 * (tex - 0.5)))[..., None]
+    rock = np.array([0.37, 0.34, 0.58]) + (np.array([0.86, 0.60, 0.54]) - np.array([0.37, 0.34, 0.58])) * litf
+    rock = rock * (0.86 + 0.28 * tex[..., None])
+    sn = np.array([0.60, 0.62, 0.90]) + (np.array([1.0, 0.87, 0.80]) - np.array([0.60, 0.62, 0.90])) * litf
+    col = rock + (sn - rock) * snow
+    col = col * (1 - haze) + np.asarray(fogc, np.float64) * haze
+    oh = int(hpx * ssx * 1.35) + 8
+    out = np.zeros((oh, nx, 4), np.float32)
+    depth_px = hpx * ssx * 0.30
+    _mrender(hf, np.ascontiguousarray(col, np.float64), out, oh - depth_px - 2, depth_px / nz, hpx * ssx * 0.20)
+    out = sp.repaint(out[..., :3], int(nx * oh / 60), (8, 26), (2, 6), 0.9, 0.5, seed=seed + 40, opacity=0.6, jitter=0.01) \
+        if False else out
+    # reduce to 1x
+    out = out[:oh // 2 * 2, :nx // 2 * 2]
+    out = out.reshape(oh // 2, 2, nx // 2, 2, 4).mean(axis=(1, 3))
+    return out.astype(np.float32)
+
+
+# ------------------------------------------------------------ rows of cloud
+_MIP = {}
+
+
+def _mips(kind, seed):
+    key = (kind, seed)
+    if key not in _MIP:
+        Fm = sp.cloud_sprite(kind, seed)
+        if kind != "band":
+            # seen from above the lumps are low soft domes: squash, and calm the light
+            Fm = ndimage.zoom(Fm, (SQUASH, 1, 1), order=1)
+            side = np.linspace(-1, 1, Fm.shape[1], dtype=np.float32)[None, :]
+            Fm[..., 1] = np.clip(ndimage.gaussian_filter(Fm[..., 1], 5.0) * 1.02 - 0.08 + 0.10 * side, 0, 1)
+            Fm[..., 0] = ndimage.gaussian_filter(Fm[..., 0], 1.2)
+        lv = [Fm]
+        while lv[-1].shape[1] > 24:
+            a = lv[-1]
+            a = a[:a.shape[0] // 2 * 2, :a.shape[1] // 2 * 2]
+            lv.append(a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2, 3).mean(axis=(1, 3)))
+        _MIP[key] = lv
+    return _MIP[key]
+
+
+def _blit(dst, oy, kind, seed, cx, base_y, sc, cols, op=1.0):
+    """Place a cloud sprite on an RGBA strip whose top row is canvas y = oy and
+    whose column 0 is canvas x = -M. The sprite base line sits at base_y."""
+    lv = _mips(kind, seed)
+    li = 0
+    s = sc
+    while s < 0.5 and li < len(lv) - 1:
+        s *= 2
+        li += 1
+    Fm = lv[li]
+    h, w = Fm.shape[:2]
+    x0 = cx + M - w * s / 2
+    y0 = base_y - oy - 0.84 * h * s
+    X0, Y0 = max(int(math.floor(x0)), 0), max(int(math.floor(y0)), 0)
+    X1, Y1 = min(int(x0 + w * s) + 2, dst.shape[1]), min(int(y0 + h * s) + 2, dst.shape[0])
+    if X1 <= X0 or Y1 <= Y0:
+        return
+    Fw = core.warp(Fm, s, x0 - X0, y0 - Y0, out_hw=(Y1 - Y0, X1 - X0))
+    core.over_rgba(dst[Y0:Y1, X0:X1], sp.colourise(Fw, cols, op))
+
+
+def _rows():
+    """Every row of cumulus tops, far to near: list of (z, y0, RGBA strip)."""
+    rows = []
+    zs = []
+    z = 150.0
+    while z > 2.0:
+        zs.append(z)
+        z /= 1.2 if z < 40 else 1.3
+    for ri, z in enumerate(zs):
+        r = core.rng("vrow", ri)
+        sc = S0 / z
+        far = z > 34
+        kind_w = 1600 if far else 960
+        kind_h = 170 if far else 760 * SQUASH
+        sh = int(kind_h * max(sc, 0.02) * 1.15) + 30
+        base0 = HZ + F / z
+        oy = int(base0 - sh + 12)
+        strip = np.zeros((sh + int(CURVE) + 30, CW, 4), np.float32)
+        step = kind_w * sc * (0.50 if not far else 0.42)
+        x = -M - r.uniform(0, step)
+        fz = float(_fz(z))
+        while x < W + M + step:
+            jx = x + r.uniform(-0.25, 0.25) * step
+            by = float(hz_at(jx)) + F / z + r.uniform(-0.12, 0.12) * F / z * 0.17
+            skip = False
+            for (gx, gy, rx, ry) in GAPS:
+                if ((jx - gx) / (rx * 0.80)) ** 2 + ((by - gy - ry * 0.9) / (ry * 1.7)) ** 2 < 1.0:
+                    skip = True
+            if far:
+                kind, seed = "band", int(r.integers(0, 7))
+            else:
+                u = r.uniform()
+                kind = "cumulus" if u < 0.72 else ("tower" if u < 0.80 else "bar")
+                seed = int(r.integers(0, {"cumulus": 7, "tower": 4, "bar": 6}[kind]))
+            scj = sc * r.uniform(0.75, 1.25) * (0.8 if kind == "tower" else 1.0)
+            x += step * r.uniform(0.7, 1.3)
+            if skip or r.uniform() < 0.08:
+                continue
+            fogc = _fog(np.float32(jx))
+            hz_ = 0.86 * fz
+            sw = float(_sunward(jx, 700.0))
+            cols = [palette.mix(c, fogc, hz_ * (0.95 if i < 2 else 0.75)) for i, c in enumerate((DEEP, SHAD, TURN, LIT, HI))]
+            cols[3] = palette.mix(cols[3], np.array([1.0, 0.93, 0.76], np.float32), 0.5 * sw)
+            _blit(strip, oy, kind, seed, jx, by, scj, cols)
+        if z < 3.3:      # nearest tops, a little out of focus
+            strip = core.gblur(strip, 2.2 + (3.3 - z) * 2.5)
+        rows.append((z, oy, strip))
+    return rows
+
+
+_L = None
+
+
+def _layers():
+    """All baked layers, back to front: (parallax, x0, y0, rgba)."""
+    global _L
+    if _L is not None:
+        return _L
+    layers = []
+    fl, fy = _floor()
+    layers.append((40.0, -M, fy, fl))
+    items = [(z, "row", oy, strip) for (z, oy, strip) in _rows()]
+    for (mx, my, mw, mh, sd) in MOUNTAINS:
+        z = F / (my - HZ)
+        hz_ = float(_fz(z)) * 0.8
+        img = _mountain(mw, mh, sd, 0.12 + hz_, _fog(np.float32(mx)))
+        yb = my + CURVE * ((mx - XC) / 960.0) ** 2 * 0.0
+        items.append((z * 0.98, "mtn", (mx - img.shape[1] / 2, yb - img.shape[0] + mh * 0.16), img))
+    items.sort(key=lambda it: -it[0])
+    for it in items:
+        if it[1] == "row":
+            layers.append((it[0], -M, it[2], it[3]))
+        else:
+            layers.append((it[0], it[2][0], it[2][1], it[3]))
+    _L = layers
+    return _L
+
+
+def _par(z):
+    return float(np.clip((7.0 / z) ** 0.5, 0.06, 2.2))
+
+
+def _place(pic, cam, p, x0, y0, layer):
+    s, tx, ty = cam.xf(p)
+    h, w = layer.shape[:2]
+    fx0, fy0 = x0 * s + tx, y0 * s + ty
+    X0, Y0 = max(int(math.floor(fx0)), 0), max(int(math.floor(fy0)), 0)
+    X1, Y1 = min(int(fx0 + w * s) + 2, W), min(int(fy0 + h * s) + 2, H)
+    if X1 <= X0 or Y1 <= Y0:
+        return
+    out = core.warp(layer, s, fx0 - X0, fy0 - Y0, out_hw=(Y1 - Y0, X1 - X0))
+    core.over(pic[Y0:Y1, X0:X1], out)
+
+
+_SKY = None
 
 
 def render(cam, f, t):
-    B = _bakeload()
-    z, a = _grid()
-    # sky, a little parallax
-    s0 = cam.zoom * cam.dolly ** 0.03
-    px0 = (cam.cx - cam.cx0) * 0.03
-    py0 = (cam.cy - cam.cy0) * 0.03
-    sky = _sky()
-    m = 160
-    pic = core.warp(sky, s0, W / 2 - (W / 2 + px0 + m) * s0, H / 2 - (H / 2 + py0 + m) * s0)
-    # stars high up
+    global _SKY
+    if _SKY is None:
+        _SKY = _sky()
+    p0 = 0.03
+    s0, tx0, ty0 = cam.xf(p0)
+    pic = core.warp(_SKY, s0, tx0 - M * s0, ty0 - M * s0)
+    # stars high up, twinkling
     from tr2 import sky as skymod
     st = skymod._stars(core.Camera(1600, 900, cy=900 - 2600), t, 0.8, 0.0)
     yy = np.arange(H, dtype=np.float32)[:, None, None]
     pic = 1 - (1 - np.clip(pic, 0, 1)) * (1 - np.clip(st * sp.ss(300.0, 20.0, yy) * 0.9, 0, 1))
 
-    p = np.clip((7.0 / z) ** 0.5, 0.05, 2.2)
-    sk = (cam.zoom * cam.dolly ** p).astype(np.float64)
-    pxk = ((cam.cx - cam.cx0) * p * 0.6).astype(np.float64)
-    pyk = ((cam.cy0 - cam.cy) * p * 0.6).astype(np.float64)
-    hzrow = _hz_at((np.arange(NA) - NA / 2 + 960.0).astype(np.float64))
-    land = np.zeros((H, W, 3), np.float32)
-    alpha = np.zeros((H, W), np.float32)
-    _march(land, alpha, B, z, hzrow, F, CAMH, TH, sk, pxk, pyk)
-    # soften the stair steps of the march a little, keep the paint
-    a3 = core.gblur(alpha, 0.7)[..., None]
-    land = core.gblur(land, 0.6)
-    pic = pic * (1 - a3) + land * a3
+    for (z, x0, y0, layer) in _layers():
+        _place(pic, cam, _par(z), x0, y0, layer)
 
-    # the air on top: thin bright line of atmosphere, haze on the horizon, sun bloom over the sea
+    # the air on top: haze on the horizon, the thin line of atmosphere, sun bloom over the sea
     xs = np.arange(W, dtype=np.float32)[None, :]
     ys = np.arange(H, dtype=np.float32)[:, None]
-    hz = (_hz_at((xs - W / 2) / s0 + W / 2 + px0) - H / 2 - py0) * s0 + H / 2
-    sx = (SUN_X - W / 2 - px0) * s0 + W / 2
-    sy = (_hz_at(SUN_X) - 16.0 - H / 2 - py0) * s0 + H / 2
+    hz = hz_at((xs - tx0) / s0) * s0 + ty0
+    sx = SUN_X * s0 + tx0
+    sy = (float(hz_at(SUN_X)) - 16.0) * s0 + ty0
     near_sun = np.exp(-np.abs(xs - sx) / 900.0)
-    haze = np.exp(-((ys - hz - 4) / 26.0) ** 2) * (0.35 + 0.65 * near_sun)
-    core.add_light(pic, haze.astype(np.float32), (1.0, 0.84, 0.66), 0.55)
-    line = np.exp(-((ys - hz + 7) / 2.6) ** 2) * (0.35 + 0.65 * near_sun) + 0.35 * np.exp(-((ys - hz + 12) / 9.0) ** 2)
+    haze = np.exp(-((ys - hz - 3) / 20.0) ** 2) * (0.35 + 0.65 * near_sun)
+    core.add_light(pic, haze.astype(np.float32), (1.0, 0.86, 0.68), 0.6)
+    line = np.exp(-((ys - hz + 6) / 2.4) ** 2) * (0.3 + 0.7 * near_sun) + 0.3 * np.exp(-((ys - hz + 11) / 9.0) ** 2)
     core.add_light(pic, line.astype(np.float32), (0.80, 0.93, 1.0), 0.5)
     d = np.sqrt(((xs - sx) * 0.55) ** 2 + (ys - sy) ** 2)
     bloom = 0.5 * np.exp(-d / 330.0) + 0.5 * np.exp(-(d / 110.0) ** 2)
-    core.add_light(pic, bloom.astype(np.float32), (1.0, 0.82, 0.52), 0.6)
+    core.add_light(pic, bloom.astype(np.float32), (1.0, 0.82, 0.52), 0.55)
     return np.clip(pic, 0, 1).astype(np.float32)

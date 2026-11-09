@@ -24,6 +24,10 @@ from . import core, palette
 P = palette.PANDA
 MOUTH_IN = np.array([0.40, 0.13, 0.13], np.float32)
 LEATHER = np.array([0.45, 0.27, 0.17], np.float32)
+DARK = np.array([0.37, 0.215, 0.185], np.float32)   # a notch above the ink so lines read on it
+LOCAL = dict(dark=DARK, fur=np.array([0.83, 0.50, 0.27], np.float32), fur_dk=np.array([0.58, 0.27, 0.17], np.float32))
+QUILT = [np.array(c, np.float32) for c in ((0.72, 0.36, 0.30), (0.40, 0.50, 0.66), (0.88, 0.82, 0.70), (0.56, 0.62, 0.45),
+                                            (0.82, 0.64, 0.40), (0.62, 0.48, 0.60), (0.80, 0.72, 0.52))]
 
 
 # ------------------------------------------------------------------- the pose
@@ -70,6 +74,7 @@ class Pose:
     # dressing
     goggles: float = -1.0      # -1 none, 0 pushed up on the forehead, 1 over the eyes
     goggles_askew: float = 0.0
+    blanket: float = 0.0       # the patchwork quilt over the sleeper (curl pose)
     soot: float = 0.0
     wind: float = 0.0          # fur ruffle 0..1
     wind_dir: tuple = (0.0, 1.0)   # screen direction the fur streams toward
@@ -232,21 +237,31 @@ class _Env:
         self.sun = np.asarray(self.t["sun"], np.float64)
         self.ink = np.asarray(self.t["ink"], np.float32)
         self.inkw = 1.5 * s ** 0.55
-        self.rimw = max(1.0, 1.15 * s ** 0.75)
+        self.rimw = 1.0 + 1.5 * s ** 0.8
         self.boil = 0.3 * s ** 0.45
         self.seed = core.seed_of("boil", int(drawing)) % 90000
         self.bfreq = 0.05 / s ** 0.5
-        ratio = np.clip(self.t["amb"] / self.t["key"], 0, 1)
+        self.key = np.asarray(self.t["key"], np.float32)
+        ratio = np.clip(self.t["amb"] / self.key * (1.12, 1.0, 1.0), 0, 1)
         self.sh8 = tuple(int(v * 255) for v in ratio)
+        # the shadow tone is pushed toward violet by a small add of the ambient
+        self.sh_add8 = tuple(int(v * 255) for v in np.clip(self.t["amb"] * 0.07 * np.array([0.9, 0.5, 1.3]), 0, 1))
         self.rim8 = tuple(int(v * 255) for v in np.clip(self.t["rim"], 0, 1))
         self.light = light
         self.pad = int(8 * s) + 6
 
     def c(self, name):
-        return palette.lit(P[name], self.t)
+        if name == "white":
+            # the mask stays a warm white in any light, never custard
+            return np.clip(P["white"] * (0.38 * self.key + 0.62), 0, 1)
+        return self.lit(LOCAL.get(name, P.get(name)))
 
     def lit(self, col):
-        return palette.lit(col, self.t)
+        """Key light on a local colour, soft clamped and a little desaturated
+        (the palette keys go above 1 and turn the fur neon otherwise)."""
+        c = np.clip(np.asarray(col, np.float32) * self.key, 0, 1)
+        g = float(c @ np.array([0.25, 0.6, 0.15], np.float32))
+        return np.clip(g + (c - g) * 0.86, 0, 1)
 
 
 class _Part:
@@ -365,6 +380,7 @@ class _Part:
             sh = ImageChops.subtract(self.form, self._shift(self.form, sx * d_sh, sy * d_sh))
             sh = ImageChops.lighter(sh, ImageChops.multiply(self.cast, self.form))
             dark = ImageChops.multiply(rgb, Image.new("RGB", self.size, e.sh8))
+            dark = ImageChops.add(dark, Image.new("RGB", self.size, e.sh_add8))
             rgb = Image.composite(dark, rgb, sh)
             if e.light and e.light.get("amount", 0) > 0.01:
                 ld = np.asarray(e.light["dir"], np.float64)
@@ -396,10 +412,10 @@ def _bounds(pts, m):
 
 # ----------------------------------------------------------------------- ears
 def _ear(ball, side, flat, s):
-    A, za = ball.pt(side * 56, 64, 0.96)
-    B, zb = ball.pt(side * 104, 28, 0.96)
+    A, za = ball.pt(side * 50, 67, 0.96)
+    B, zb = ball.pt(side * 108, 25, 0.96)
     f = max(flat, -0.6)
-    T, zt = ball.pt(side * (80 + 26 * f), 58 - 46 * f, 1.80 - 0.26 * max(f, 0))
+    T, zt = ball.pt(side * (79 + 16 * f), 58 - 36 * f, 1.90 - 0.45 * max(f, 0))
     ln = math.hypot(*(T - (A + B) / 2))
 
     def bulge(a, b, other, k):
@@ -410,10 +426,7 @@ def _ear(ball, side, flat, s):
             n = -n
         return a + d * 0.52 + n * k * ln
 
-    tip_in = T + (A - T) * 0.10
-    tip_out = T + (B - T) * 0.10
-    curve = core.catmull([A, bulge(A, T, B, 0.15), tip_in, T + (T - (A + B) / 2) * 0.03, tip_out,
-                          bulge(B, T, A, 0.20)[::1], B], 8, closed=False)
+    curve = core.catmull([A, bulge(A, T, B, 0.17), T, bulge(B, T, A, 0.22), B], 10, closed=False)
     base = (A + B) / 2 + (ball.c - (A + B) / 2) * 0.35
     G = (A + B + T) / 3
     _, _, nz = ball.rot(_sph(side * 38, 18))
@@ -427,18 +440,16 @@ def _ear_paint(p, e, env):
     if e["nz"] > 0.12:
         k = min(1.0, 0.45 + e["nz"])
         G, base = e["G"], e["base"]
-        inner = G + (e["curve"] - G) * 0.70 * np.array([1, 1]) + (base - G) * 0.10
-        inner = np.vstack([inner, base + (G - base) * 0.25])
+        inner = G + (e["curve"] - G) * 0.80 + (base - G) * 0.05
         em = p.mask(e["poly"])
         p.fill(inner, env.c("white"), form=False, clip=em)
-        core_ = G + (e["curve"] - G) * 0.40 * k + (base - G) * 0.30
-        p.fill(np.vstack([core_, base + (G - base) * 0.3]), env.c("ear_in"), form=False, clip=em)
-        # two fur tufts growing from the inner base
-        for j, (u, lnk) in enumerate(((0.30, 0.42), (0.52, 0.33))):
-            a0 = e["A"] + (e["B"] - e["A"]) * u
-            tipv = a0 + (e["T"] - a0) * lnk
-            wv = (e["B"] - e["A"]) * 0.09
-            p.fill(np.array([a0 - wv, tipv, a0 + wv]), env.c("white"), form=False, clip=em)
+        # the hollow of the ear, its top edge broken by three tufts of white fur
+        o_ = (e["A"] + e["B"]) / 2
+        u_ = (e["B"] - e["A"]) / 2
+        v_ = e["T"] - o_
+        fl = [(-0.66, -0.1), (-0.50, 0.30), (-0.30, 0.15), (-0.08, 0.50), (0.12, 0.19), (0.32, 0.37), (0.62, -0.1)]
+        hollow = core.catmull(np.array([o_ + u_ * a_ + v_ * b_ * k for a_, b_ in fl]), 5, closed=True, tension=0.42)
+        p.fill(hollow, palette.mix(env.c("ear_in"), env.c("fur"), 0.25), form=False, clip=em)
     else:
         p.fill(e["poly"], palette.mix(env.c("fur"), env.c("fur_dk"), 0.55))
     p.ink(e["curve"], env.inkw * 1.05, taper=(0.10, 0.10))
@@ -470,7 +481,7 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
     n = np.where(sa > 0, 2.75 + 0.5 * ck, 2.12)
     lx = RX * np.sign(ca) * np.abs(ca) ** (2 / n) * (1 + np.where(sa > 0, (0.07 + 0.13 * ck) * sa, 0.0))
     ly = RY * np.sign(sa) * np.abs(sa) ** (2 / n)
-    wd = np.asarray(pose.wind_dir, np.float64) * pose.wind
+    wd = np.asarray(pose.wind_dir, np.float64) * pose.wind * 0.55
     deg = np.degrees(a)
 
     def tuft(ac, hw, L, lean):
@@ -480,14 +491,15 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
         lx = lx + s * L * t * (math.cos(math.radians(ac)) + lean[0])
         ly = ly + s * L * t * (math.sin(math.radians(ac)) + lean[1])
 
-    k = 1 + 1.4 * pose.wind
-    for sd in (1, -1):
-        base = 0 if sd == 1 else 180
-        tuft(base + sd * 10, 13, 7.0 * k, (0.15 * sd + wd[0] * 1.3, 0.6 + wd[1] * 1.3))
-        tuft(base + sd * 36, 11, 5.2 * k, (0.05 * sd + wd[0], 0.55 + wd[1]))
+    k = 1 + 0.5 * pose.wind
+    # the cheek ruff: four bold tufts a side, no two alike, the low ones overlap the neck
+    for ac, hw_, L_, ly_ in ((5, 15, 7.0, 0.3), (27, 17, 11.5, 0.5), (50, 11, 6.5, 0.6),
+                             (177, 13, 6.0, 0.25), (157, 18, 12.5, 0.45), (133, 12, 7.5, 0.6), (113, 8, 4.0, 0.7)):
+        sd = 1 if ac < 90 else -1
+        tuft(ac, hw_, L_ * k, (0.15 * sd + wd[0] * 1.2, ly_ + wd[1] * 1.2))
     cr = 270 + pose.head_yaw * 22
-    tuft(cr - 7, 7.5, 4.6, (0.55 + wd[0], -0.1 + wd[1] * 0.5))
-    tuft(cr + 5, 6.5, 3.0, (0.65 + wd[0], 0.0))
+    tuft(cr - 7, 9.0, 4.8, (0.35 + wd[0], -0.1 + wd[1] * 0.5))
+    tuft(cr + 6, 7.0, 3.2, (0.4 + wd[0], 0.0))
     outline = ball.loc(lx, ly)
     fur, white = env.c("fur"), env.c("white")
     p.fill(outline, fur)
@@ -496,37 +508,40 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
         _ear_paint(p, e, env)
 
     # ---- white mask: muzzle, bridge and cheeks
-    half = [(0, 16), (7, 14), (12, 5), (16, -8), (25, -16), (37, -18), (50, -14), (64, -5), (80, 1),
-            (100, -6), (112, -40), (84, -70), (42, -85)]
+    half = [(0, 19), (6, 17), (10, 7), (13, -7), (21, -16), (33, -18), (46, -14), (58, -5), (70, 3), (84, 2),
+            (96, -10), (102, -40), (80, -72), (42, -86)]
+    tears = []
     pts = half + [(0, -89)] + [(-lo, la) for lo, la in half[::-1]]
     ll = core.catmull(pts, 6, closed=True)
     mp, mz = ball.patch(ll[:, 0], ll[:, 1])
     p.fill(mp, white, form=False, clip=hm)
     # tear marks from the eye down the cheek
-    tear = palette.mix(env.c("fur"), env.c("fur_dk"), 0.7)
+    tear = palette.mix(env.c("fur"), env.c("fur_dk"), 0.9)
     for sd in (-1, 1):
-        cl = core.catmull([(sd * 31, -8), (sd * 42, -23), (sd * 52, -40), (sd * 58, -58), (sd * 60, -74)], 6, closed=False)
-        hwd = np.interp(np.linspace(0, 1, len(cl)), [0, 0.35, 0.75, 1], [7.5, 6.0, 4.2, 2.0])
+        cl = core.catmull([(sd * 17, -7), (sd * 25, -19), (sd * 29, -31), (sd * 25, -42), (sd * 17, -49)], 6, closed=False)
+        hwd = np.interp(np.linspace(0, 1, len(cl)), [0, 0.35, 0.75, 1], [6.5, 5.6, 3.6, 0.8])
         t = np.gradient(cl, axis=0)
         t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
         nr = np.c_[-t[:, 1], t[:, 0]]
         rb = np.vstack([cl + nr * hwd[:, None], (cl - nr * hwd[:, None])[::-1]])
         tp, tz = ball.patch(rb[:, 0], rb[:, 1])
         if tz.mean() > -0.25:
-            p.fill(tp, tear, form=False, clip=hm)
+            tears.append(tp)
 
     # ---- muzzle: a small white bump that leaves the silhouette in profile
-    mf = ball.frame(0, -25, 1.02, minx=0.5)
+    mf = ball.frame(0, -25, 1.10, minx=0.6)
     t = np.linspace(0, 2 * np.pi, 40, endpoint=False)
     mloc = np.c_[14.5 * np.cos(t), 10.5 * np.sin(t)]
     muz = _put(mf, mloc, s)
     show_face = mf[3] > -0.28
     if show_face:
         p.fill(muz, white)
+    for tp in tears:
+        p.fill(tp, tear, form=False, clip=hm)
 
     # ---- brows: the white dots do the acting
     for sd, br in ((-1, pose.brow_l), (1, pose.brow_r)):
-        lo, la = _ell(sd * 30, 34 + 7 * br, 8.5, 5.0, 24, rot=-sd * (8 + 22 * pose.brow_tilt))
+        lo, la = _ell(sd * 28, 32 + 7 * br, 9.5, 5.2, 24, rot=-sd * (8 + 22 * pose.brow_tilt))
         bp, bz = ball.patch(lo, la)
         if bz.mean() > -0.1:
             p.fill(bp, white, form=False, clip=hm)
@@ -535,24 +550,25 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
     eyec = env.c("eye")
     lside = -1.0 if env.sun[0] < 0 else 1.0
     px, py = pose.pupil
-    for sd, op in ((-1, pose.eye_l), (1, pose.eye_r)):
-        elon, elat = sd * 32.0, 3.0
-        ew, eh = 12.5, 16.0
+    _eyes(p, ball, env, pose, hm, s, anchors)
+    for sd, op in ():
+        elon, elat = sd * 29.0, 1.0
+        ew, eh = 12.8, 16.8
         if op > 1:
             eh *= 1 + 0.2 * (op - 1)
             ew *= 1 + 0.12 * (op - 1)
         o = min(op, 1.0)
         _, cz = ball.pt(elon, elat)
-        if cz < -0.12:
+        if cz < 0.2:
             continue
         if o < 0.1 or pose.squeeze > 0.5:
             u = np.linspace(-1, 1, 22)
             up = pose.eye_smile > 0.3 or pose.squeeze > 0.5
             bow = 1.0 if up else -1.0
-            lo = elon + ew * 1.02 * u
-            la = elat - (0.05 if up else 0.35) * eh + bow * 0.40 * eh * (1 - u * u) - sd * 0.10 * ew * u
+            lo = elon + ew * 1.1 * u
+            la = elat - (0.15 if up else 0.35) * eh + bow * 0.46 * eh * (1 - u * u) - sd * 0.10 * ew * u
             cp_, _ = ball.patch(lo, la)
-            p.ink(cp_, w * 2.1, taper=(0.22, 0.22), lightdir=False)
+            p.ink(cp_, w * 2.7, taper=(0.2, 0.2), lightdir=False)
             if pose.squeeze > 0.5:
                 c0 = np.array([elon + sd * ew * 1.02, la[-1] if sd > 0 else la[0]])
                 for dlo, dla in ((7, 7), (8.5, -1), (6.5, -8)):
@@ -582,11 +598,11 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
         # highlights: a big one toward the light, a small one opposite
         wpx = np.ptp(ep[:, 0])
         hpx = np.ptp(ep[:, 1])
-        h1, _ = ball.pt(elon + lside * 0.30 * ew + px * 1.5, elat + 0.40 * eh * min(1.0, o * 1.2))
-        r1 = 0.25 * wpx * pose.hl
+        h1, _ = ball.pt(elon + lside * 0.34 * ew + px * 1.5, elat + (0.36 * min(1.0, o * 1.2) - 0.9 * (1 - o)) * eh)
+        r1 = 0.185 * wpx * pose.hl
         p.later(core.ellipse(h1[0], h1[1], r1, r1 * 1.12, 22, rot=0.3), (1, 1, 1), clip=em)
         h2, _ = ball.pt(elon - lside * 0.36 * ew + px * 1.5, elat - 0.42 * eh)
-        r2 = 0.105 * wpx * pose.hl
+        r2 = 0.085 * wpx * pose.hl
         p.later(core.ellipse(h2[0], h2[1], r2, r2, 14), (1, 0.97, 0.9), clip=em)
         # the upper lid: a heavy line with a small flick at the outer corner
         idx = np.where(st > 0.12)[0]
@@ -599,13 +615,13 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
 
     # ---- nose and mouth
     if show_face:
-        nf = ball.frame(0, -13, 1.21, minx=0.62)
+        nf = ball.frame(0, -13, 1.31, minx=0.62)
         nose = core.catmull([(-4.0, -2.3), (0, -2.9), (4.0, -2.3), (4.3, -0.3), (1.7, 2.6), (0, 3.0), (-1.7, 2.6), (-4.3, -0.3)], 5)
         npoly = _put(nf, nose, s)
         p.fill(npoly, env.c("nose"), form=False)
         nh = _put(nf, np.array([[-1.2 * 1 + lside * 1.0, -1.5]]), s)[0]
         p.later(core.ellipse(nh[0], nh[1], 1.25 * s, 0.7 * s, 12), env.lit(palette.mix(P["nose"], (1, 1, 1), 0.6)))
-        kf = ball.frame(0, -32, 1.10, minx=0.55)
+        kf = ball.frame(0, -32, 1.17, minx=0.55)
         op, wd_, sm = pose.mouth_open, pose.mouth_wide, pose.smile
         cw = 6.4 + 2.6 * wd_
         cyv = 0.8 - 2.4 * sm
@@ -621,8 +637,9 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
             mpoly = _put(kf, shape, s)
             mm = p.mask(mpoly)
             p.fill(mpoly, env.lit(MOUTH_IN), form=False)
-            tg = _put(kf, core.ellipse(0, dp * 0.98, cw * 0.62, dp * 0.42, 20), s)
-            p.fill(tg, env.c("tongue"), form=False, clip=mm)
+            if op > 0.3:
+                tg = _put(kf, core.ellipse(0, dp * 0.98, cw * 0.62, dp * 0.42, 20), s)
+                p.fill(tg, env.c("tongue"), form=False, clip=mm)
             # one small fang
             fg = _put(kf, np.array([[-0.62 * cw, 1.7], [-0.36 * cw, 2.2], [-0.47 * cw, 4.6]]), s)
             p.fill(fg, white, form=False, clip=mm)
@@ -631,8 +648,10 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
             tq = _put(kf, core.ellipse(1.6, 2.2 + 2.6 * pose.tongue, 2.6, 2.4 + 1.6 * pose.tongue, 18), s)
             p.fill(tq, env.c("tongue"), form=False)
             p.ink(tq, w * 0.7, closed=True, lightdir=False)
-        p.ink(_put(kf, left, s), w * 1.05, taper=(0.05, 0.3), lightdir=False)
-        p.ink(_put(kf, right, s), w * 1.05, taper=(0.05, 0.3), lightdir=False)
+        if pose.head_yaw < 0.62:
+            p.ink(_put(kf, right, s), w * 1.05, taper=(0.05, 0.3), lightdir=False)
+        if pose.head_yaw > -0.62:
+            p.ink(_put(kf, left, s), w * 1.05, taper=(0.05, 0.3), lightdir=False)
         anchors["mouth"] = ctr
         anchors["mouth_l"] = _put(kf, np.array([[-cw * 0.7, 1.6]]), s)[0]
         anchors["mouth_r"] = _put(kf, np.array([[cw * 0.7, 1.6]]), s)[0]
@@ -680,28 +699,152 @@ def _draw_head(cel, env, pose, hc, s, roll=0.0):
             p.ink(muz[r], w * 1.1, taper=(0.06, 0.06))
     else:
         p.ink(outline, w * 1.2, closed=True, taper=(0, 0))
-    p.finish(5.2 * s)
+    p.finish(8.5 * s)
     anchors["head"] = ball.c.copy()
     anchors["ball"] = ball
     anchors["outline"] = outline
     return anchors
 
 
+def _eyes(p, ball, env, pose, hm, s, anchors):
+    """Both eyes use one construction on a board glued to the head, so the far
+    eye in a three quarter view is the same eye, only narrower."""
+    w = env.inkw
+    eyec = env.c("eye")
+    iris = env.c("iris")
+    lside = -1.0 if env.sun[0] < 0 else 1.0
+    px, py = pose.pupil
+    for sd, op in ((-1, pose.eye_l), (1, pose.eye_r)):
+        fr = ball.frame(sd * 29.0, 1.0, 1.0, minx=0.64)
+        if fr[3] < 0.18:
+            continue
+        o, ex, ey = fr[0], fr[1], fr[2]
+        ew, eh = 8.7, 9.7
+        if op > 1:
+            eh *= 1 + 0.2 * (op - 1)
+            ew *= 1 + 0.12 * (op - 1)
+        opn = min(op, 1.0)
+        # keep the whole eye on the face: slide it in from the silhouette
+        ax = np.array([ball.cr, ball.sr])
+        lxp = float((o - ball.c) @ ax)
+        lim = ball.rx * 0.90 - ew * s * math.hypot(*ex)
+        if abs(lxp) > lim:
+            o = o - ax * (abs(lxp) - lim) * (1 if lxp > 0 else -1)
+        frm = (o, ex, ey)
+
+        def put(q, frm=frm):
+            return _put(frm, np.asarray(q, np.float64).reshape(-1, 2), s)
+
+        if opn < 0.1 or pose.squeeze > 0.5:
+            u = np.linspace(-1, 1, 24)
+            up = pose.eye_smile > 0.3 or pose.squeeze > 0.5
+            xs = ew * 1.12 * u
+            ys = (0.1 if up else 0.3) * eh - (1 if up else -1) * 0.5 * eh * (1 - u * u) + sd * 0.10 * xs
+            line = np.c_[xs, ys]
+            if sd > 0:
+                line = line[::-1]
+            p.ink(put(line), w * 2.8, taper=(0.18, 0.25), lightdir=False)
+            for f_ in (0.05, 0.2):
+                q0 = line[int(f_ * 23)]
+                p.ink(put([q0, q0 + np.array([sd * 0.24 * ew, (0.2 if up else 0.3) * eh])]), w * 1.3,
+                      taper=(0.05, 0.6), lightdir=False)
+            if pose.squeeze > 0.5:
+                c0 = line[0]
+                for dx_, dy_ in ((0.5, -0.55), (0.66, -0.05)):
+                    p.ink(put([c0 + np.array([sd * 0.1 * ew, 0]), c0 + np.array([sd * dx_ * ew, dy_ * eh])]),
+                          w * 1.1, taper=(0.1, 0.5), lightdir=False)
+            continue
+        t = np.linspace(0, 2 * np.pi, 56, endpoint=False)
+        ct, st = np.cos(t), np.sin(t)
+        xs = ew * np.sign(ct) * np.abs(ct) ** 0.88
+        ys = eh * np.sign(st) * np.abs(st) ** 0.88
+        un = xs / ew
+        top = -eh + 2 * eh * (1 - opn) - 0.12 * eh * (1 - opn) * (1 - un * un)
+        ys = np.maximum(ys, top)
+        ys = np.minimum(ys, eh - pose.eye_smile * eh * (0.25 + 0.75 * (1 - un * un)))
+        ys = ys + sd * 0.10 * xs
+        shape = np.c_[xs, ys]
+        ep = put(shape)
+        em = p.mask(ep, hm)
+        p.fill(ep, eyec, form=False, clip=hm)
+        cx_, cy_ = px * 2.4, 0.06 * eh - py * 2.4
+        p.fill(put(core.ellipse(cx_, cy_, 0.86 * ew, 0.84 * eh, 28)), palette.mix(iris, eyec, 0.5), form=False, clip=em)
+        p.fill(put(core.ellipse(cx_, cy_ + 0.40 * eh, 0.74 * ew, 0.50 * eh, 26)), iris, form=False, clip=em)
+        p.fill(put(core.ellipse(cx_, cy_ + 0.68 * eh, 0.50 * ew, 0.21 * eh, 20)),
+               env.lit(palette.mix(P["iris"], (1.0, 0.74, 0.32), 0.6)), form=False, clip=em)
+        ps = pose.pupil_size
+        p.fill(put(core.ellipse(cx_, cy_ - 0.04 * eh, 0.40 * ew * ps, 0.46 * eh * ps, 22)), eyec, form=False, clip=em)
+        hy = max(-0.42 * eh, -eh + 2 * eh * (1 - opn) + 0.3 * eh)
+        r1 = 0.27 * ew * pose.hl
+        p.later(put(core.ellipse(lside * 0.36 * ew + px, hy, r1, r1 * 1.1, 22)), (1, 1, 1), clip=em)
+        r2 = 0.12 * ew * pose.hl
+        p.later(put(core.ellipse(-lside * 0.38 * ew + px, 0.46 * eh, r2, r2, 14)), (1, 0.97, 0.9), clip=em)
+        lid = shape[np.where(st < -0.05)[0]]          # the top of the eye, x from -ew to +ew
+        if sd > 0:
+            lid = lid[::-1]                            # outer corner first
+        flick = lid[0] + np.array([sd * 0.30 * ew, -0.10 * eh])
+        p.ink(put(np.vstack([flick, lid])), w * 2.7, taper=(0.22, 0.2), lightdir=False)
+        for f_, ln_ in ((0.10, 0.22), (0.25, 0.16)):
+            q0 = lid[int(f_ * (len(lid) - 1))]
+            p.ink(put([q0, q0 + np.array([sd * ln_ * ew * 0.9, -ln_ * eh])]), w * 1.25, taper=(0.02, 0.65), lightdir=False)
+        p.ink(put(shape[np.where(st > 0.5)[0]]), w * 0.85, taper=(0.3, 0.3), lightdir=False)
+        anchors["eye_l" if sd < 0 else "eye_r"] = ep.mean(0)
+
+
+def _quilt(cel, env, body, x, y, s):
+    """The patchwork blanket over the sleeper: follows the loaf of the body."""
+    c0 = body.mean(0)
+    big = c0 + (body - c0) * np.array([1.06, 1.08])
+    big[:, 1] = np.minimum(big[:, 1], y + 1.0 * s)
+    keep = big[:, 0] > x - 4 * s + (big[:, 1] - (y - 30 * s)) * 0.3
+    runs = _runs(keep)
+    if not runs:
+        return
+    quilt = big[max(runs, key=len)]
+    p = _Part(cel, _bounds(quilt, 6 * s + 4), env)
+    p.fill(quilt, env.lit(QUILT[2]))
+    qm = p.mask(quilt)
+    r = core.rng("quilt")
+    x0, y0, x1, y1 = _bounds(quilt, 0)
+    nx, ny = 4, 3
+    g = np.zeros((ny + 1, nx + 1, 2))
+    for j in range(ny + 1):
+        for i in range(nx + 1):
+            u = i / nx
+            arch = -(1 - (2 * u - 1) ** 2) * (1 - j / ny) * (y1 - y0) * 0.10
+            g[j, i] = (x0 + (x1 - x0) * u + r.uniform(-3, 3) * s + (j - 1.5) * 4 * s,
+                       y0 + (y1 - y0) * j / ny + arch + r.uniform(-2.5, 2.5) * s)
+    st_col = env.lit((0.95, 0.90, 0.78))
+    k = 0
+    for j in range(ny):
+        for i in range(nx):
+            quad = np.array([g[j, i], g[j, i + 1], g[j + 1, i + 1], g[j + 1, i]])
+            p.fill(quad, env.lit(QUILT[(k * 3 + j) % len(QUILT)]), form=False, clip=qm)
+            k += 1
+            for a_, b_ in ((quad[0], quad[1]), (quad[0], quad[3])):
+                for q in range(5):
+                    m0 = a_ + (b_ - a_) * (q + 0.25) / 5 + np.array([1.5, 1.5]) * s
+                    m1 = a_ + (b_ - a_) * (q + 0.7) / 5 + np.array([1.5, 1.5]) * s
+                    p.ink(np.array([m0, m1]), env.inkw * 0.7, col=st_col, taper=(0.1, 0.1), lightdir=False, clip=qm)
+    p.ink(quilt, env.inkw * 1.1, closed=True, taper=(0, 0))
+    p.finish(6.0 * s)
+
+
 def _goggles(p, ball, env, pose, hm, s):
     g = core.clamp(pose.goggles)
     la0 = 55 + (3 - 55) * g
-    r0 = 17.5 + 4.5 * g
+    r0 = 16.0 + 3.0 * g
     rr = 1.07
     sk = pose.goggles_askew
     rimc = env.lit(palette.ROCKET["copper"])
     glass = env.lit(palette.ROCKET["glass"])
     strap = env.lit(LEATHER)
-    lo = np.r_[np.linspace(-178, 178, 60), np.linspace(178, -178, 60)]
+    lo = np.r_[np.linspace(-104, 104, 60), np.linspace(104, -104, 60)]
     la = np.r_[np.full(60, la0 + 6.0), np.full(60, la0 - 6.0)] + sk * np.r_[np.linspace(-1, 1, 60), np.linspace(1, -1, 60)] * 0.25
     sp, sz = ball.patch(lo, la)
     p.fill(sp, strap, form=False, clip=hm)
     for sd in (-1, 1):
-        clo, cla = sd * (24 + 8 * g), la0 + sd * sk * 0.2
+        clo, cla = sd * (23 + 7 * g), la0 + sd * sk * 0.2
         _, cz = ball.pt(clo, cla)
         if cz < 0.05:
             continue
@@ -716,7 +859,7 @@ def _goggles(p, ball, env, pose, hm, s):
             p.fill(ip_, glass, form=False)
         gm = p.mask(ip_)
         c0, _ = ball.proj(_sph(clo - 4, cla + 4, rr))
-        q = np.array([[-0.5, -0.12], [0.1, -0.12], [0.5, 0.12], [-0.1, 0.12]]) * np.ptp(ip_[:, 0])
+        q = np.array([[-0.26, -0.05], [0.06, -0.05], [0.26, 0.05], [-0.06, 0.05]]) * np.ptp(ip_[:, 0])
         q = np.c_[q[:, 0] + q[:, 1] * 1.2, q[:, 1] * 2.2 - q[:, 0] * 0.7]
         p.later(c0[0] + q, (1, 1, 1), clip=gm)
         p.ink(op_, env.inkw * 1.05, closed=True, taper=(0, 0))
@@ -736,14 +879,28 @@ def _limb(cel, env, ctrl, hw, col, s, toes=0, toe_dir=None, extra=None, d_sh=Non
         p.fill(extra, col)
         p.ink(extra, env.inkw, closed=True, taper=(0, 0))
     p.ink(poly, env.inkw, closed=True, taper=(0, 0))
+    lt = palette.mix(col, env.lit(P["pad"]), 0.8)
     if toes:
+        # a mitten paw: four toe bumps round the end
         tip, tv, nv, r = c[-1], t[-1], np.array([-t[-1][1], t[-1][0]]), w[-1]
-        lt = palette.mix(col, env.lit(P["pad"]), 0.75)
-        for k in (-0.38, 0.38):
-            a = tip + tv * r * 0.98 + nv * r * k
-            b = tip + tv * r * 0.35 + nv * r * k * 0.8
-            p.ink(np.array([a, b]), env.inkw * 0.75, col=lt, taper=(0.05, 0.6), lightdir=False)
-    p.finish((d_sh or 3.2) * s)
+        for ph, rr_ in ((-1.0, 0.33), (-0.36, 0.38), (0.30, 0.38), (0.94, 0.32)):
+            dv = math.cos(ph) * tv + math.sin(ph) * nv
+            cc = tip + dv * r * 0.80
+            an = np.linspace(-1.5, 1.5, 12)
+            pv = np.array([-dv[1], dv[0]])
+            arc = cc + r * rr_ * (np.cos(an)[:, None] * dv + np.sin(an)[:, None] * pv)
+            p.fill(np.vstack([arc, cc - dv * r * 0.3]), col)
+            p.ink(arc, env.inkw * 0.9, taper=(0.2, 0.2))
+            p.ink(np.array([cc - dv * r * 0.1 + pv * r * rr_ * 0.95, cc - dv * r * 0.55 + pv * r * rr_ * 0.7]),
+                  env.inkw * 0.7, col=lt, taper=(0.05, 0.6), lightdir=False)
+    if extra is not None:
+        # toes on the foot
+        ec = extra.mean(0)
+        erx, ery = np.ptp(extra[:, 0]) / 2, np.ptp(extra[:, 1]) / 2
+        for k in (-0.42, 0.0, 0.42):
+            p.ink(np.array([ec + (k * erx, ery * 0.96), ec + (k * erx * 0.85, ery * 0.15)]), env.inkw * 0.75, col=lt,
+                  taper=(0.05, 0.6), lightdir=False)
+    p.finish((d_sh or 3.4) * s)
     return c
 
 
@@ -841,51 +998,76 @@ def draw(cel, pose, x, y, s=1.0, tod="dusk", drawing=0, light=None):
         f = G(ft[0], ft[1])
         ank = f + np.array([0, -6.5 * s])
         mid = (hip + ank) / 2 + np.array([sd * 1.5 * s * cyw, 0])
-        foot = core.ellipse(f[0] + syw * 4.0 * s, f[1] - 4.6 * s, (9.5 + 2.5 * abs(syw)) * s, 5.6 * s, 26)
-        _limb(cel, env, [hip, mid, ank], np.array([8.5, 8.0, 7.2]) * s, dark, s, extra=foot)
+        foot = core.ellipse(f[0] + (syw * 5.0 + sd * 1.5 * cyw) * s, f[1] - 5.4 * s, (11.5 + 3.0 * abs(syw)) * s, 6.8 * s, 26)
+        _limb(cel, env, [hip, mid, ank], np.array([9.5, 8.6, 7.4]) * s, dark, s, extra=foot)
 
     # shoulders, far arms first
     arms = []
     for sd, pw in ((-1, pose.paw_l), (1, pose.paw_r)):
         S, z = torso.pt(sd * 66, 42, 0.90)
         if pw is None:
-            Pw = S + np.array([sd * 6.0 * cyw + syw * 3, 30.0]) * s
+            Pw = S + np.array([sd * 3.5 * cyw + syw * 3, 31.0]) * s
         else:
             Pw = G(pw[0], pw[1])
         d = Pw - S
         dist = math.hypot(*d)
-        L1 = 18.5 * s
+        L1 = 18.6 * s
         h = math.sqrt(max(L1 * L1 - (dist / 2) ** 2, 0.0))
         nrm = np.array([-d[1], d[0]]) / max(dist, 1e-6)
         if nrm @ np.array([sd * (1 if front else -1), 0.45]) < 0:
             nrm = -nrm
-        E = (S + Pw) / 2 + nrm * h * 0.9
-        arms.append((z, sd, [S, E, Pw]))
+        E = (S + Pw) / 2 + nrm * h
+        # a real elbow: two points close together make the bend, the forearm runs straight to the wrist
+        ctrl = [S, S + (E - S) * 0.6, E, E + (Pw - E) * 0.45, Pw]
+        arms.append((z, sd, ctrl))
         anchors["paw_l" if sd < 0 else "paw_r"] = Pw
-    hw_arm = np.array([6.6, 6.0, 5.8, 7.9]) * s
+    hw_arm = np.array([8.0, 7.4, 6.6, 5.6, 5.4, 8.8]) * s
     for z, sd, ctrl in arms:
         if z < -0.05:
-            _limb(cel, env, ctrl, hw_arm, dark, s, toes=2)
+            _limb(cel, env, ctrl, hw_arm, dark, s, toes=4)
 
     # torso
     a = np.linspace(0, 2 * np.pi, 96, endpoint=False)
     ca, sa = np.cos(a), np.sin(a)
-    lx = torso.rx * ca * (1 + 0.13 * sa) + syw * torso.rx * 0.10 * np.maximum(sa + 0.2, 0)
+    # a pear: narrow shoulders, heavy hips, the belly pushed toward where it faces
+    lx = torso.rx * ca * (1 + 0.24 * sa) * (1 - 0.06 * np.abs(sa) ** 3) + syw * torso.rx * 0.12 * np.maximum(sa + 0.2, 0)
     ly = torso.ry * sa
+    # hip tufts break the egg
+    for ac, hw_, L_ in ((38, 12, 3.6), (150, 13, 4.2)):
+        d_ = np.abs((np.degrees(a) - ac + 180) % 360 - 180)
+        t_ = np.clip(1 - d_ / hw_, 0, 1) ** 1.3
+        lx = lx + s * L_ * t_ * math.cos(math.radians(ac))
+        ly = ly + s * L_ * t_ * (math.sin(math.radians(ac)) + 0.5)
     tout = torso.loc(lx, ly)
     p = _Part(cel, _bounds(tout, 8 * s + 4), env)
     p.fill(tout, env.c("fur"))
     tm = p.mask(tout)
-    lo, la = _ell(0, -18, 46, 66, 36, pw=0.9)
-    lo = lo * (0.72 + 0.28 * np.clip((60 - la) / 100, 0, 1))
+    # the dark belly wraps the form; its edge is tufted, not an ellipse
+    tb = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    saw = np.abs(((tb * 8 / (2 * np.pi) + 0.35 * np.sin(tb * 3)) % 1.0) - 0.5) * 2
+    rad = 1.0 + 0.08 * saw * (0.4 + 0.6 * np.abs(np.cos(tb)))
+    lo = 40 * np.cos(tb) * rad
+    la = -24 + 62 * np.sin(tb) * rad
+    lo = lo * (0.66 + 0.34 * np.clip((55 - la) / 100, 0, 1))
     bp, bz = torso.patch(lo, la)
     if bz.mean() > -0.2:
         p.fill(bp, dark, form=False, clip=tm)
-    # the head throws a shadow on the chest
-    hsh = core.ellipse(hc[0] - env.sun[0] * 7 * s, hc[1] + 9 * s - env.sun[1] * 3 * s, 37 * s, 31 * s, 40)
-    p.shadow(hsh)
+    # the chest ruff: fur falling from under the chin over the top of the belly
+    rf = [(-60, 62), (-54, 45), (-45, 49), (-37, 34), (-26, 41), (-12, 23), (1, 35), (13, 27), (24, 41), (35, 35),
+          (45, 48), (54, 45), (62, 62), (30, 86), (-30, 86)]
+    rp, rz = torso.patch([q[0] for q in rf], [q[1] for q in rf])
+    if rz.mean() > -0.15:
+        p.fill(rp, palette.mix(env.c("fur"), env.c("white"), 0.10), form=False, clip=tm)
+        p.ink(rp[1:12], env.inkw * 0.8, taper=(0.1, 0.1), lightdir=False, clip=tm)
+    # designed shadows: the head and cheek ruff on the chest and shoulders, each near arm on the body
+    off = np.array([-env.sun[0] * 7 * s, 11 * s - env.sun[1] * 3 * s])
+    p.shadow(core.ellipse(hc[0] + off[0], hc[1] + off[1], 43 * s, 33 * s, 40))
+    for z, sd, ctrl in arms:
+        if z >= -0.05:
+            ap = _tube(ctrl, hw_arm * 1.12, n=30)[0]
+            p.shadow(ap + np.array([-env.sun[0] * 4.5 * s, 3.0 * s - env.sun[1] * 2.5 * s]))
     p.ink(tout, env.inkw * 1.15, closed=True, taper=(0, 0))
-    p.finish(5.0 * s)
+    p.finish(6.0 * s)
 
     if not front:
         anchors["tail_tip"] = _draw_tail(cel, env, tctrl, s, pose.wind)
@@ -894,7 +1076,7 @@ def draw(cel, pose, x, y, s=1.0, tod="dusk", drawing=0, light=None):
 
     for z, sd, ctrl in arms:
         if z >= -0.05:
-            _limb(cel, env, ctrl, hw_arm, dark, s, toes=2)
+            _limb(cel, env, ctrl, hw_arm, dark, s, toes=4)
     return anchors
 
 
@@ -906,8 +1088,8 @@ def _draw_curled(cel, env, pose, x, y, s):
     br = pose.breath
     a = np.linspace(0, 2 * np.pi, 110, endpoint=False)
     ca, sa = np.cos(a), np.sin(a)
-    bx = 8 + (46 + 1.0 * br) * np.sign(ca) * np.abs(ca) ** 0.9 * (1 + 0.05 * sa)
-    by = 27 + 1.5 * br - (27 + 2.2 * br) * np.sign(sa) * np.abs(sa) ** 0.8 * -1
+    bx = 8 + (45 + 1.0 * br) * np.sign(ca) * np.abs(ca) ** 0.9 * (1 + 0.05 * sa)
+    by = 30 + 1.5 * br + (30 + 2.2 * br) * np.sign(sa) * np.abs(sa) ** 0.75
     body = np.c_[x + s * bx, y - s * by]
     p = _Part(cel, _bounds(body, 8 * s + 4), env)
     p.fill(body, env.c("fur"))
@@ -917,6 +1099,8 @@ def _draw_curled(cel, env, pose, x, y, s):
     hn = core.catmull([G(52, 30), G(40, 40), G(22, 38), G(12, 22), G(14, 6)], 8, closed=False)
     p.ink(hn, env.inkw, taper=(0.25, 0.3), lightdir=False)
     p.finish(5.5 * s)
+    if pose.blanket > 0.05:
+        _quilt(cel, env, body, x, y, s)
     anchors = _draw_head(cel, env, pose, hc, s)
     tl = pose.tail if pose.tail is not None else ((50, 13), (26, 6), (-2, 7), (-30, 12), (-55, 22), (-64, 40))
     anchors["tail_tip"] = _draw_tail(cel, env, np.array([G(*q) for q in tl]), s)
@@ -940,17 +1124,17 @@ def bbox(pose, x, y, s):
 # ------------------------------------------------------------ the pose library
 POSES = {
     "stand": Pose(),
-    "stand_34": Pose(yaw=0.42, head_yaw=0.42),
+    "stand_34": Pose(yaw=0.42, head_yaw=0.36),
     "stand_profile": Pose(yaw=0.95, head_yaw=0.95),
     "stand_34back": Pose(yaw=1.45, head_yaw=1.45),
     "proud": Pose(yaw=0.2, head_yaw=0.3, pitch=0.25, lean=-3, paw_l=(-25, 62), paw_r=(27, 62), smile=0.8,
                   eye_smile=0.35, brow_l=0.3, brow_r=0.3, breath=1.0),
-    "tie_knot": Pose(yaw=0.38, head_yaw=0.5, pitch=-0.28, tilt=5, lean=4, paw_l=(14, 74), paw_r=(40, 80),
-                     mouth_open=0.22, smile=0.1, brow_tilt=-0.35, brow_l=-0.2, brow_r=-0.2, pupil=(0.35, -0.55),
+    "tie_knot": Pose(yaw=0.38, head_yaw=0.36, pitch=-0.12, tilt=-5, lean=-8, paw_l=(27, 69), paw_r=(45, 83),
+                     mouth_open=0.14, smile=0.1, brow_tilt=-0.35, brow_l=-0.2, brow_r=-0.2, pupil=(0.35, -0.55),
                      eye_l=0.9, eye_r=0.9, ear_l=-0.1, ear_r=0.05),
     "pleased": Pose(head_yaw=0.3, yaw=0.3, eye_l=0.0, eye_r=0.0, eye_smile=1.0, smile=0.9, tilt=6, brow_l=0.4, brow_r=0.4),
-    "sleep": Pose(curl=1.0, head_yaw=-0.18, tilt=-10, eye_l=0.0, eye_r=0.0, smile=0.2, ear_l=0.55, ear_r=0.5,
-                  brow_l=-0.3, brow_r=-0.3),
+    "sleep": Pose(curl=1.0, head_yaw=-0.18, tilt=-10, eye_l=0.0, eye_r=0.0, smile=0.2, ear_l=0.7, ear_r=-0.05,
+                  brow_l=-0.3, brow_r=-0.3, blanket=1.0),
     "wind": Pose(pitch=0.2, eye_l=0.5, eye_r=0.45, eye_smile=0.2, brow_tilt=0.8, brow_l=0.5, brow_r=0.5, mouth_open=0.7,
                  mouth_wide=1.0, smile=-0.3, cheek=0.7, ear_l=1.0, ear_r=1.0, wind=1.0, wind_dir=(0.0, 0.75),
                  pupil_size=0.8, paw_l=(-22, 92), paw_r=(22, 92), goggles=1.0),

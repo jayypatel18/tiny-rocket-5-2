@@ -5,8 +5,9 @@
 
 SKY coordinates: the default screen is SX 0..1920, SY 0..1080 with the horizon
 at SY = 520. The sky is tall: it goes on up to SY = -2160 (three screens).
-Pans move it by 0.02 of the camera move. Tilts scroll it by TILT of the camera
-rise (cam.cy0 - cam.cy), so a rise of 4320 px reaches the zenith.
+Dolly and crane moves (cam.cx, cam.cy) move it by 0.02 and 0.05 of the move.
+cam.tilt and cam.pan (the camera rotating) scroll it 1:1 in screen px, so a
+tilt of 2500 px looks at the high sky near SY = -2500.
 """
 import math
 
@@ -18,12 +19,12 @@ from tr2 import sky_paint as sp
 
 W, H = core.W, core.H
 HZ = 520.0            # horizon line on the default screen
-TOP = -2160.0         # top of the tall sky
-TILT = 0.5            # sky scroll per px of camera rise
+TOP = -2800.0         # top of the tall sky
+TILT = 0.05           # sky scroll per px of camera crane rise (cam.cy); cam.tilt scrolls 1:1
 PAN = 0.02
 POLE = (1500.0, -200.0)   # the point the stars turn around (sky coords)
 CX0, CX1 = -192, 2112     # extent of the painted texture canvas
-CY0, CY1 = -2260, 1140
+CY0, CY1 = -2900, 1140
 
 
 # ------------------------------------------------------------- sky mapping
@@ -31,13 +32,10 @@ def view(cam):
     """(s, ox, oy): sky point (SX, SY) lands on screen at (SX*s + ox, SY*s + oy)."""
     s = cam.zoom * (cam.dolly ** PAN)
     pan = (cam.cx - cam.cx0) * PAN
-    rise = (cam.cy0 - cam.cy) * TILT
-    lim = -TOP
-    if rise > lim * 0.8:        # soft stop at the zenith
-        rise = lim * 0.8 + lim * 0.2 * (1 - math.exp(-(rise - lim * 0.8) / (lim * 0.2)))
-    rise = max(rise, -300.0)
-    ox = W / 2 - (W / 2 + pan) * s + cam.shake[0] * 0.3
-    oy = H / 2 - (H / 2 - rise) * s + cam.shake[1] * 0.3
+    rise = max((cam.cy0 - cam.cy) * TILT, -300.0)
+    # cam.tilt / cam.pan: the camera rotates, so the sky moves 1:1 in screen px
+    ox = W / 2 - (W / 2 + pan) * s + cam.shake[0] * 0.3 - getattr(cam, "pan", 0.0)
+    oy = H / 2 - (H / 2 - rise) * s + cam.shake[1] * 0.3 + getattr(cam, "tilt", 0.0)
     return s, ox, oy
 
 
@@ -50,7 +48,7 @@ def _v_of(SY):
     """Gradient height v (0 zenith side .. 1 horizon) and a zenith deepening."""
     SY = np.asarray(SY, np.float32)
     lo = 1.0 - 0.9 * (540.0 - SY) / 540.0
-    hi = 0.1 * np.exp(np.minimum(SY, 0) / 700.0)
+    hi = 0.1 * np.exp(np.minimum(SY, 0) / 900.0)
     v = np.where(SY >= 0, lo, hi)
     deep = 1.0 - 0.38 * (1 - np.exp(np.minimum(SY, 0) / 1300.0))
     return np.clip(v, 0, 1), deep
@@ -74,7 +72,7 @@ def sun_pos(tod):
     """Where the sun or moon sits in sky coords, from the palette direction."""
     T = palette.TOD[tod] if isinstance(tod, str) else tod
     sx, sy = T["sun"]
-    x = 960 + sx * 1240
+    x = 960 + sx * 1080
     y = HZ - float(np.clip((-sy - 0.42) * 1500, -70, 2000))
     return x, y
 
@@ -83,13 +81,13 @@ def sun_pos(tod):
 def _canvas():
     def make():
         h, w = CY1 - CY0, CX1 - CX0
-        f1 = sp.stroke_field(h, w, 2600, (320, 1000), (36, 110), 0.0, 0.07, seed=11, opacity=0.9)
-        f2 = sp.stroke_field(h, w, 5200, (120, 420), (14, 44), 0.0, 0.14, seed=12, opacity=0.75)
+        f1 = sp.stroke_field(h, w, 3100, (320, 1000), (36, 110), 0.0, 0.07, seed=11, opacity=0.9)
+        f2 = sp.stroke_field(h, w, 6200, (120, 420), (14, 44), 0.0, 0.14, seed=12, opacity=0.75)
         big = core.fbm(h, w, 600, 3, 21, aspect=2.0) - 0.5
         dv = 0.55 * f1 + 0.3 * f2 + 1.6 * big
         grain = 0.6 * (core.fbm(h, w, 5, 2, 31) - 0.5) + 0.5 * (core.fbm(h, w, 46, 3, 32, aspect=4.0) - 0.5) + 0.2 * f2
         return np.stack([dv, grain], -1).astype(np.float16)
-    return sp.cached("canvas_v2", make).astype(np.float32)
+    return sp.cached("canvas_v3", make).astype(np.float32)
 
 
 _CANVAS = None
@@ -107,12 +105,12 @@ def _tex(cam):
 def _catalogue():
     def make():
         r = core.rng("stars", 5)
-        n = 46000
-        R = 2750.0
+        n = 66000
+        R = 3350.0
         rad = R * np.sqrt(r.uniform(0, 1, n))
         th = r.uniform(0, 2 * np.pi, n)
         # the milky way: a band of extra faint stars, offset from the pole
-        m = 30000
+        m = 40000
         u = r.uniform(-R, R, m)
         vv = r.normal(0, 210, m) + 60 * np.sin(u / 500.0)
         bx, by = _band_xy(u, vv)
@@ -121,7 +119,7 @@ def _catalogue():
         N = n + m
         b = r.uniform(0, 1, N) ** 9.0
         b[n:] *= 0.55
-        b[r.integers(0, n, 70)] = r.uniform(0.75, 1.0, 70)      # the few bright ones
+        b[r.integers(0, n, 100)] = r.uniform(0.75, 1.0, 100)      # the few bright ones
         kind = r.uniform(0, 1, N)
         col = np.ones((N, 3))
         col[kind < 0.30] = (0.72, 0.82, 1.0)
@@ -133,7 +131,7 @@ def _catalogue():
         ph = r.uniform(0, 2 * np.pi, N)
         fr = r.uniform(1.2, 5.0, N)
         return np.c_[rad, th, b, col, ph, fr].astype(np.float32)
-    return sp.cached("stars_v3", make)
+    return sp.cached("stars_v4", make)
 
 
 BAND_ANG = 0.285
@@ -255,31 +253,32 @@ def _stars(cam, t, amount, turn):
 # drift px/s, haze toward the sky, opacity, tilt gain, pan parallax.
 LOOKS = {
     "dusk": [
-        dict(kinds=("bar", "bar", "cumulus"), n=9, y=(345, 470), sc=(0.26, 0.46), v=2.2, haze=0.50, op=0.95, tg=1.0, pp=0.02),
-        dict(kinds=("cumulus", "bar", "cumulus"), n=6, y=(150, 330), sc=(0.5, 0.8), v=5.5, haze=0.22, op=1.0, tg=1.06, pp=0.035),
-        dict(kinds=("cumulus", "tower"), n=2, y=(-40, 120), sc=(0.72, 0.95), v=11.0, haze=0.04, op=1.0, tg=1.15, pp=0.06),
-        dict(kinds=("cumulus", "wisp", "bar"), n=10, y=(-2050, -350), sc=(0.7, 1.4), v=8.0, haze=0.12, op=1.0, tg=1.1, pp=0.04),
+        dict(kinds=("band",), n=16, y=(455, 600), sc=(0.20, 0.38), v=1.4, haze=0.50, op=0.9, tg=1.0, pp=0.02, tint=(1.0, 0.92, 0.82)),
+        dict(kinds=("band", "band", "bar"), n=12, y=(350, 470), sc=(0.36, 0.62), v=2.4, haze=0.36, op=0.95, tg=1.0, pp=0.025, tint=(1.0, 0.96, 0.90)),
+        dict(kinds=("cumulus", "bar", "cumulus", "band"), n=6, y=(180, 340), sc=(0.42, 0.66), v=5.0, haze=0.20, op=1.0, tg=1.06, pp=0.035),
+        dict(kinds=("cumulus", "tower"), n=2, y=(10, 150), sc=(0.66, 0.86), v=10.0, haze=0.05, op=1.0, tg=1.15, pp=0.06),
+        dict(kinds=("cumulus", "wisp", "bar"), n=12, y=(-2700, -350), sc=(0.6, 1.0), v=8.0, haze=0.12, op=1.0, tg=1.1, pp=0.04),
     ],
     "night": [
-        dict(kinds=("wisp", "bar"), n=7, y=(330, 470), sc=(0.35, 0.6), v=2.0, haze=0.45, op=0.6, tg=1.0, pp=0.02),
+        dict(kinds=("band", "wisp", "band"), n=9, y=(330, 480), sc=(0.35, 0.6), v=2.0, haze=0.45, op=0.6, tg=1.0, pp=0.02),
         dict(kinds=("wisp",), n=4, y=(60, 300), sc=(0.7, 1.1), v=5.0, haze=0.25, op=0.42, tg=1.06, pp=0.035),
-        dict(kinds=("wisp",), n=6, y=(-2000, -300), sc=(0.8, 1.4), v=7.0, haze=0.2, op=0.4, tg=1.1, pp=0.04),
+        dict(kinds=("wisp",), n=8, y=(-2700, -300), sc=(0.8, 1.4), v=7.0, haze=0.2, op=0.4, tg=1.1, pp=0.04),
     ],
     "dawn": [
         dict(kinds=("bar", "wisp", "bar"), n=9, y=(350, 475), sc=(0.28, 0.5), v=2.2, haze=0.42, op=0.95, tg=1.0, pp=0.02),
         dict(kinds=("wisp", "bar", "cumulus"), n=5, y=(120, 330), sc=(0.5, 0.85), v=5.5, haze=0.2, op=0.9, tg=1.06, pp=0.035),
         dict(kinds=("cumulus",), n=2, y=(-120, 90), sc=(0.9, 1.2), v=10.0, haze=0.05, op=1.0, tg=1.15, pp=0.06),
-        dict(kinds=("cumulus", "tower", "bar", "cumulus"), n=14, y=(-2100, -380), sc=(0.8, 1.7), v=8.0, haze=0.1, op=1.0, tg=1.1, pp=0.04),
+        dict(kinds=("wisp", "cumulus", "wisp", "bar", "wisp", "tower"), n=20, y=(-2750, -380), sc=(0.7, 1.3), v=8.0, haze=0.1, op=0.95, tg=1.1, pp=0.04),
     ],
     "morning": [
         dict(kinds=("cumulus", "bar"), n=10, y=(350, 470), sc=(0.22, 0.4), v=2.5, haze=0.5, op=0.95, tg=1.0, pp=0.02),
         dict(kinds=("cumulus",), n=6, y=(150, 330), sc=(0.45, 0.75), v=6.0, haze=0.2, op=1.0, tg=1.06, pp=0.035),
         dict(kinds=("cumulus", "tower"), n=3, y=(-140, 100), sc=(1.0, 1.4), v=12.0, haze=0.03, op=1.0, tg=1.15, pp=0.06),
-        dict(kinds=("cumulus", "wisp"), n=10, y=(-2050, -350), sc=(0.7, 1.4), v=8.0, haze=0.1, op=1.0, tg=1.1, pp=0.04),
+        dict(kinds=("cumulus", "wisp"), n=12, y=(-2700, -350), sc=(0.7, 1.4), v=8.0, haze=0.1, op=1.0, tg=1.1, pp=0.04),
     ],
 }
 LOOK_OF = dict(dusk="dusk", night="night", predawn="dawn", launch="dawn", sunrise="dawn", morning="morning")
-NSPR = dict(cumulus=7, tower=4, bar=6, wisp=6)
+NSPR = dict(cumulus=7, tower=4, bar=6, wisp=6, band=7)
 PERIOD = 3400.0
 
 
@@ -335,14 +334,14 @@ def _clouds(tod, look, cam, t, amount, skyc_fn):
             if sun_left:
                 F = F[:, ::-1]
             Fw = core.warp(F, sc, x0 - X0, y0 - Y0, out_hw=(Y1 - Y0, X1 - X0))
-            cols = sp.tones(T, skyc_fn(SY), lay["haze"])
+            cols = sp.tones(T, skyc_fn(SY), lay["haze"], tint=lay.get("tint"))
             rgba = sp.colourise(Fw, cols, lay["op"] * vis)
             core.over_rgba(out[Y0:Y1, X0:X1], rgba)
     return out
 
 
 # -------------------------------------------------------------- the render
-GLOW = dict(dusk=0.62, night=0.20, predawn=0.34, launch=0.46, sunrise=0.8, morning=0.5)
+GLOW = dict(dusk=0.80, night=0.20, predawn=0.34, launch=0.46, sunrise=0.8, morning=0.5)
 STARS = dict(dusk=0.15, night=1.0, predawn=0.3, launch=0.12, sunrise=0.0, morning=0.0)
 
 
@@ -372,9 +371,9 @@ def render(tod, cam, f, t, stars=None, clouds=1.0, star_turn=0.0, shooting=None,
     yy = ys[:, None]
     gl = GLOW.get(name, 0.4) if sun else 0.0
     if gl > 0:
-        d = np.sqrt(((xs - px) * 0.62) ** 2 + (yy - py) ** 2) / s
+        d = np.sqrt(((xs - px) * 0.52) ** 2 + (yy - py) ** 2) / s
         d = d * (1.0 + 0.10 * tex[..., 0])
-        g = 0.55 * np.exp(-d / 520.0) + 0.5 * np.exp(-(d / 210.0) ** 2) + 0.9 * np.exp(-(d / 60.0) ** 2)
+        g = 0.55 * np.exp(-d / 760.0) + 0.55 * np.exp(-(d / 300.0) ** 2) + 0.9 * np.exp(-(d / 80.0) ** 2)
         band = np.exp(-((yy - hz_y) / (120.0 * s)) ** 2) * np.exp(-np.abs(xs - px) / (1500.0 * s))
         gcol = palette.mix(T["rim"], T["key"] / max(1.0, float(T["key"].max())), 0.3)
         core.add_light(pic, (g + 0.5 * band).astype(np.float32), gcol, gl)

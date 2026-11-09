@@ -114,6 +114,86 @@ def contact_shadow(pic, cam, X, Y, w, tod, strength=0.35, squash=0.22):
     reg += col * a[..., None]
 
 
+ROCKET_X = 1720.0
+MAP_X = 1180.0
+
+
+def draw_rocket(pic, cam, tod, drawing, state=None, view="side", X=ROCKET_X, dY=0.0, rot=0.0, shadow=True,
+                behind=None, scale=1.0):
+    """The rocket standing on the hill (or wherever X, dY put it), as a cel over `pic`.
+    behind(cel, info): optional hook to draw something inside the window before the glass.
+    Returns the info dict from rocket.draw (window centre, nozzle, tip) or None."""
+    try:
+        from .. import rocket
+    except ImportError:
+        return None
+    s, tx, ty = cam.xf(1.0)
+    gy = ground_y(X)
+    if shadow:
+        contact_shadow(pic, cam, X, gy + 6, 190 * scale, tod, 0.42)
+    cel = core.Cel(ss=2 if s * scale > 1.6 else 3)
+    info = rocket.draw(cel, X * s + tx, (gy + dY) * s + ty, s=s * scale, tod=tod, drawing=drawing, rot=rot,
+                       view=view, state=state)
+    if behind is not None:
+        behind(cel, info)
+    try:
+        rocket.draw_glass(cel, info, tod, drawing)
+    except Exception as e:  # noqa
+        print("draw_glass:", repr(e)[:120])
+    core.over(pic, cel.rgba())
+    return info
+
+
+def draw_panda(pic, cam, tod, act, light=None, shadow=True):
+    """The panda from an acting dict (tr2/acting.py): pose, X (set x of the feet),
+    dY (height above the ground, set px, negative is up), s (scale), drawing."""
+    if act is None or not act.get("visible", True):
+        return
+    from .. import panda
+    s, tx, ty = cam.xf(1.0)
+    X = act["X"]
+    gy = ground_y(X)
+    sc = s * act.get("s", 1.0)
+    if shadow and act.get("shadow", True):
+        contact_shadow(pic, cam, X, gy + 4, 120 * act.get("s", 1.0), tod, 0.40)
+    cel = core.Cel(ss=2 if sc > 1.6 else 3)
+    panda.draw(cel, act["pose"], X * s + tx, (gy + act.get("dY", 0.0)) * s + ty, s=sc, tod=tod,
+               drawing=act.get("drawing", 0), light=light)
+    core.over(pic, cel.rgba())
+
+
+def draw_map_prop(pic, cam, tod, t, wind=1.0, X=MAP_X, star_t=-1.0):
+    """The star map on its stick, small, as it appears in the wide cuts. The
+    sheet is the same painting as the close up (tr2/starmap.py), fluttering."""
+    from .. import starmap
+    s, tx, ty = cam.xf(1.0)
+    gy = ground_y(X)
+    k = 0.085                                    # sheet scale in set px per sheet px: about 128 x 89
+    tt = palette.TOD[tod] if isinstance(tod, str) else tod
+    # stick
+    cel = core.Cel(ss=3)
+    wood = palette.lit((0.50, 0.36, 0.22), tt)
+    wood_dk = palette.shade((0.50, 0.36, 0.22), tt)
+    x0, y0 = X * s + tx, gy * s + ty
+    top = y0 - 150 * s
+    stick = np.array([(x0 - 3.2 * s, y0 + 6 * s), (x0 - 2.6 * s, top), (x0 + 2.6 * s, top - 2 * s), (x0 + 3.6 * s, y0 + 6 * s)])
+    m = cel.mask(stick)
+    cel.fill(stick, wood)
+    cel.crescent(stick, wood_dk, (-2.2 * s * np.sign(tt["sun"][0]), 0), clip=m)
+    cel.stroke(stick[[0, 1]], 1.3 * max(s, 0.8), tt["ink"])
+    cel.stroke(stick[[3, 2]], 1.5 * max(s, 0.8), tt["ink"])
+    core.over(pic, cel.rgba())
+    # sheet
+    lay = starmap.fluttered(starmap.with_star(star_t), t, wind=wind, rot=-0.05)
+    lay = lay.copy()
+    lay[..., :3] *= np.clip(0.5 * (np.asarray(tt["key"]) + np.asarray(tt["amb"])) * 1.08, 0, 1.15)
+    sc = k * s
+    px = x0 - (starmap.SW / 2) * sc
+    py = top + 6 * s
+    placed = core.warp(lay, sc, px, py)
+    core.over(pic, placed)
+
+
 def shake(f, amp, seed=0, hz=24.0):
     """Camera shake offset (dx, dy) in px. Changes every frame (hz=24) or slower."""
     k = int(f * hz / FPS)

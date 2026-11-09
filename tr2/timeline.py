@@ -46,7 +46,7 @@ CUES = {
     # shot 3: waiting for morning (night)
     "night_starts": 14.0,              # music box or celesta colour
     "shooting_star_night": [17.2, 18.0],
-    "ear_twitch_sleep": 19.3,
+    "ear_twitch_sleep": 20.3,
     # shot 4: first light (predawn)
     "wake": 21.8,
     "yawn_stretch": 22.4,

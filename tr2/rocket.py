@@ -136,7 +136,7 @@ class _Draw:
     def hot(self, c, k=1.0):
         """Local colour under the fire light from below."""
         c = np.asarray(c, np.float32)
-        f = np.clip(c * np.array([1.30, 0.93, 0.56], np.float32) + self.fire * 0.05, 0, 1)
+        f = np.clip(c * np.array([1.34, 0.87, 0.47], np.float32) + self.fire * 0.05, 0, 1)
         return palette.mix(self.lit(c), f, min(1.0, 0.9 * k))
 
     def sooty(self, c, k):
@@ -611,7 +611,7 @@ def draw(cel, x, y, s=1.0, tod="dusk", drawing=0, rot=0.0, view="side", state=No
     d.solid("body", R["paper"], fire_frac=0.07, soot_frac=0.3)
     _body_details(d)
     d.solid_ink()
-    d.solid("skirt", R["tin"], fire_frac=0.5, soot_frac=0.7)
+    d.solid("skirt", R["tin"], fire_frac=0.85, soot_frac=0.7)
     _skirt_details(d)
     d.solid_ink()
     inner = palette.mix(SOOT * 0.7, np.array([1.0, 0.86, 0.5], np.float32), min(1.0, st.flame * 1.2))

@@ -27,6 +27,22 @@ RIVER = [(1560, 886), (1850, 902), (2180, 930), (2300, 968), (2140, 1010), (1990
 _river = interpolate.PchipInterpolator([p[1] for p in RIVER], [p[0] for p in RIVER])
 
 
+# Per time of day: how much direct (shadow casting) light there is, and how much
+# colour the eye still sees. Night and the blue hour are flatter and cooler.
+LOOK = dict(dusk=(1.0, 1.0), night=(0.55, 0.50), predawn=(0.30, 0.60), launch=(0.42, 0.70),
+            sunrise=(1.0, 1.0), morning=(1.0, 1.0))
+
+
+def look(tod):
+    return LOOK.get(tod, (1.0, 1.0)) if isinstance(tod, str) else (1.0, 1.0)
+
+
+def desat(c, s):
+    c = np.asarray(c, np.float32)
+    g = c.mean(axis=-1, keepdims=True)
+    return g + (c - g) * s
+
+
 def ground_y(X):
     """Hill crest (the line characters stand on), set coords."""
     X = np.asarray(X, np.float64)
@@ -89,24 +105,29 @@ def paint_mountains(name, tod):
         ridges = [(748, 125, 900, 11, 0.86, True), (792, 88, 620, 12, 0.72, True), (828, 62, 420, 13, 0.58, False)]
         loc_l, loc_s = (0.60, 0.46, 0.50), (0.42, 0.42, 0.68)
     else:
-        ridges = [(846, 64, 520, 21, 0.42, False), (874, 46, 330, 22, 0.27, False)]
-        loc_l, loc_s = (0.44, 0.50, 0.26), (0.26, 0.38, 0.48)
+        ridges = [(846, 64, 520, 21, 0.50, False), (872, 46, 330, 22, 0.36, False)]
+        loc_l, loc_s = (0.50, 0.46, 0.34), (0.30, 0.36, 0.56)
     for (yb, amp, sc, seed, haze, snow) in ridges:
         ry, hh = _ridge(xs, yb, amp, sc, seed)
         if name == "near":
             ry = ry - 9 * core.fbm_at(xs, xs * 0 + 1.7, 15, 3, seed + 3) - 5 * core.fbm_at(xs, xs * 0 + 4.1, 5, 2, seed + 4)
         below = (Y - ry[None, :]).astype(np.float32)
         a = np.clip(below * k / 1.5 + 0.5, 0, 1)
-        rel = core.fbm(h, w, (130 if name == "far" else 60) * k, 5, seed=seed + 40, aspect=1.2)
+        rel = core.fbm(h, w, (230 if name == "far" else 90) * k, 4, seed=seed + 40, aspect=1.3, gain=0.42)
         gx = np.gradient(rel, axis=1)
         gyy = np.gradient(rel, axis=0)
-        l = smoothstep(-0.0012, 0.0022, -(gx * sx + gyy * sy))
+        l = smoothstep(-0.0008, 0.0016, -(gx * sx + gyy * sy))
         dr = np.gradient(ndimage.gaussian_filter1d(ry, 5 * k)) * k
         l2 = smoothstep(0.22, -0.22, dr * (1.0 if sx < 0 else -1.0)).astype(np.float32)
         wgt = np.exp(-np.maximum(below, 0) / (0.9 * amp)).astype(np.float32)
-        l = l * (1 - 0.65 * wgt) + l2[None, :] * 0.65 * wgt
+        # spurs running down from the ridge, away from the sun
+        dirx = 1.0 if sx < 0 else -1.0
+        rib = core.fbm_at((X + dirx * 1.25 * below).ravel(), (below * 0.22).ravel(), 95.0 if name == "far" else 60.0, 4, seed + 60).reshape(h, w)
+        lf = smoothstep(0.44, 0.56, rib + 0.5 * (l - 0.5) * 0.4)
+        l = (lf * (1 - 0.55 * wgt) + l2[None, :] * 0.55 * wgt) * look(tod)[0]
         hz = haze * T["fog_k"] / 0.75
         hz = np.clip(hz + (1 - hz) * 0.8 * smoothstep(0.3 * amp, 1.5 * amp + 40, below), 0, 0.97)
+        hz = np.maximum(hz, 0.98 * smoothstep(790 if name == "far" else 822, 884, Y))
         col = mixc(palette.shade(loc_s, T), np.asarray(loc_l, np.float32) * key, l)
         if snow:
             sn = smoothstep(0.50, 0.70, hh).astype(np.float32)[None, :] * smoothstep(1.0, 0.25, below / (amp * 0.5) + 0.9 * (rel - 0.5))
@@ -114,7 +135,7 @@ def paint_mountains(name, tod):
             col = mixc(col, scol, sn * 0.9)
         col = mixc(col, fog, hz)
         lay(ref, alpha, col, a)
-    out = paint.paint(ref, alpha, seed=paint_seed(name, tod), passes=paint.LOOSE, scale=0.42 * k, spill=2.5, grain=0.04)
+    out = paint.paint(ref, alpha, seed=paint_seed(name, tod), passes=paint.LOOSE, scale=0.5 * k, spill=2.5, grain=0.035)
     return out
 
 
@@ -141,7 +162,7 @@ def river_field(name="valley"):
     dist, idx = ndimage.distance_transform_edt(centre, sampling=(3.4, 1.0), return_indices=True)
     yn = y0 + (idx[0] + 0.5) / k
     dn = np.clip((yn - HORIZON) / 620.0, 0, 1)
-    hw = (2.5 + 78.0 * dn ** 1.25) * k
+    hw = (5.0 + 120.0 * dn ** 1.15) * k
     hw = hw * (0.85 + 0.3 * core.fbm(h, w, 90 * k, 3, seed=77))
     cov = smoothstep(hw + 1.5, hw - 1.5, dist)
     cov *= smoothstep(RIVER[0][1] - 2, RIVER[0][1] + 10, Y)
@@ -392,20 +413,30 @@ def paint_valley(tod):
     local = local * (0.90 + 0.2 * hv2)[..., None]
     local = local * (1.0 + 0.05 * np.sin(fc * 6.283 * (4 + 6 * hv2)))[..., None]
     big = core.fbm(h, w, 420 * k, 4, seed=41, aspect=2.6)
-    lv = np.clip(0.50 + 0.9 * (big - 0.5), 0, 1)
+    lv = np.clip(0.50 + 0.9 * (big - 0.5), 0, 1) * look(tod)[0]
+    local = desat(local, look(tod)[1])
     shade_loc = local * np.float32((0.80, 1.0, 1.10))
     col = mixc(shade_loc * amb * 1.1, local * key, lv)
     hedge = smoothstep(1.0, 0.35, edge)
     col = mixc(col, palette.shade((0.22, 0.34, 0.30), T), hedge * 0.85)
     ref = np.ascontiguousarray(col, np.float32)
     # haze with distance
-    hz = T["fog_k"] * (0.22 + 0.78 * np.clip(1 - d / 0.62, 0, 1) ** 1.25)
+    mean = np.float32((0.50, 0.60, 0.32)) * (0.45 * key + 0.5 * amb)
+    ref = mixc(ref, mean, smoothstep(0.30, 0.02, d) * 0.6)      # far fields simplify
+    ref *= 0.88
+    hz = T["fog_k"] * (0.10 + 0.66 * np.clip(1 - d / 0.55, 0, 1) ** 1.6)
     ref = mixc(ref, fog, hz)
     # river: a ribbon of sky
     rc, rhw, rdist = river_field()
-    sky = palette.sky_color(T, np.clip(1.02 - 0.85 * d, 0, 1))
+    sky_far = np.clip(palette.sky_color(T, 1.0) * 1.03, 0, 1)
+    sky_near = np.clip(palette.sky_color(T, 0.2) * 1.30 + 0.02, 0, 1)
+    sky = mixc(np.broadcast_to(sky_far, (h, w, 3)), sky_near, smoothstep(0.08, 0.55, d))
     rip = core.fbm(h, w, 5 * k, 3, seed=43, aspect=9.0)
-    rcol = np.clip(sky * (0.97 + 0.16 * (rip - 0.5))[..., None], 0, 1)
+    rip2 = core.fbm(h, w, 24 * k, 3, seed=48, aspect=7.0)
+    rcol = sky * (0.93 + 0.20 * (rip - 0.5) + 0.20 * (rip2 - 0.5))[..., None]
+    rcol = mixc(rcol, np.clip(T["rim"] * 1.02 + 0.05, 0, 1), smoothstep(0.60, 0.70, rip) * 0.45 * smoothstep(0.6, 0.1, d))
+    inner = smoothstep(rhw * 0.35, rhw, rdist) * smoothstep(0.38, 0.62, rip2 + 0.25 * (rip - 0.5) + 0.12)
+    rcol = np.clip(mixc(rcol, mixc(palette.shade((0.24, 0.36, 0.36), T), fog, hz * 0.6), inner * 0.6), 0, 1)
     bank = smoothstep(rhw + 7 * k * ps + 2, rhw, rdist) * (1 - rc)
     ref = mixc(ref, mixc(palette.shade((0.20, 0.30, 0.30), T), fog, hz * 0.8), bank * 0.75)
     ref = mixc(ref, rcol, rc)
@@ -425,7 +456,7 @@ def paint_valley(tod):
             continue
         rx = (26 + 60 * r.random()) * pp * k
         ry_ = rx * r.uniform(0.55, 0.9)
-        hzz = float(T["fog_k"] * (0.22 + 0.78 * max(0.0, 1 - dd / 0.62) ** 1.25)) * 0.85
+        hzz = float(T["fog_k"] * (0.10 + 0.66 * max(0.0, 1 - dd / 0.55) ** 1.6)) * 0.85
         cl = mixc(np.clip(np.float32((0.40, 0.50, 0.24)) * key, 0, 1), fog, np.float32(hzz))
         cs = mixc(palette.shade((0.16, 0.30, 0.32), T), fog, np.float32(hzz))
         # cast shadow on the ground, away from the sun
@@ -436,18 +467,21 @@ def paint_valley(tod):
     mist = smoothstep(0.42, 0.75, core.fbm(h, w, 300 * k, 4, seed=44, aspect=5.0)) * smoothstep(0.42, 0.04, d) * 0.62
     mcol = np.clip(fog * 1.04 + 0.02, 0, 1)
     ref = mixc(ref, mcol, mist)
+    mn = core.fbm(h, w, 240 * k, 4, seed=49, aspect=6.0)
+    ref = mixc(ref, fog, smoothstep(0.15, 0.0, d + 0.10 * (mn - 0.5)) ** 1.5 * 0.80)   # the far edge dissolves
     # the village
     vil, (vx, vy), windows = _village(tod, x0, y0, k, rc)
     core.over(ref, vil, vx, vy)
     veil = smoothstep(0.5, 0.85, core.fbm(h, w, 220 * k, 3, seed=45, aspect=6.0)) * smoothstep(0.5, 0.08, d) * 0.22
     ref = mixc(ref, mcol, veil)
     edge_n = core.fbm(h, w, 70 * k, 3, seed=46, aspect=4.0)
-    alpha = smoothstep(HORIZON - 14, HORIZON + 12, Y + 16 * (edge_n - 0.5)).astype(np.float32)
+    edge_n = 0.6 * edge_n + 0.4 * core.fbm(h, w, 320 * k, 3, seed=50, aspect=5.0)
+    alpha = smoothstep(HORIZON - 30, HORIZON + 24, Y + 46 * (edge_n - 0.5)).astype(np.float32)
     ang = (0.12 * (core.fbm(h, w, 200 * k, 2, seed=47) - 0.5)).astype(np.float32)  # near horizontal drags
     size = (0.35 + 0.9 * d).astype(np.float32)
     out = paint.paint(ref, None, direction=ang, seed=paint_seed("valley", tod), passes=paint.PASSES[1:], scale=0.6 * k, size=size, grain=0.045)
     # crisp village back on top of the brushwork
-    core.over(out, vil, vx, vy, opacity=0.62)
+    core.over(out, vil, vx, vy, opacity=0.78)
     out = core.premul(out, alpha)
     return out, np.asarray(windows, np.float32), rc
 
@@ -459,7 +493,7 @@ GRASS = [
     dict(w=9, l=38, dens=1.6, op=0.88, keep=0.20, detail=0.25, jh=0.030, jv=0.08, dry=0.8, pool=0.06),
     dict(w=4, l=24, dens=1.5, op=0.90, keep=0.14, detail=0.45, jh=0.025, jv=0.07, dry=0.7, pool=0.04),
 ]
-PATH = [(1292, 0, 10), (1262, 26, 13), (1205, 70, 18), (1130, 135, 27), (1040, 230, 42), (930, 360, 64), (800, 520, 92), (700, 640, 120)]
+PATH = [(1292, 0, 9), (1272, 22, 12), (1215, 56, 16), (1120, 96, 22), (1030, 160, 32), (1010, 260, 48), (930, 380, 66), (780, 520, 92), (640, 640, 120)]
 
 
 def hill_light(tod, X, Y, t):
@@ -514,6 +548,8 @@ def paint_hill(tod):
     t = Y - gy[None, :]
     alpha = np.clip((t + tuft[None, :].astype(np.float32)) * k / 1.5 + 0.5, 0, 1).astype(np.float32)
     l, n1, n2 = hill_light(tod, X, Y, t)
+    direct, sat = look(tod)
+    l = l * direct
     n3 = core.fbm(h, w, 130 * k, 4, seed=63, aspect=1.8)
     n4 = core.fbm(h, w, 22 * k, 3, seed=64, aspect=0.6)
     g1 = np.float32((0.50, 0.64, 0.22))
@@ -521,7 +557,7 @@ def paint_hill(tod):
     g3 = np.float32((0.32, 0.52, 0.26))
     local = mixc(g1, g2, smoothstep(0.45, 0.70, n3))
     local = mixc(local, g3, smoothstep(0.52, 0.72, n1) * 0.8)
-    local = local * (0.88 + 0.24 * n4)[..., None]
+    local = desat(local * (0.88 + 0.24 * n4)[..., None], sat)
     sh_loc = local * np.float32((0.62, 0.98, 1.22))
     violet = smoothstep(0.50, 0.75, n2) * 0.45
     sh_col = mixc(sh_loc * amb, palette.shade((0.36, 0.34, 0.60), T), violet)
@@ -545,22 +581,22 @@ def paint_hill(tod):
         vv = (Y[j0:j1, i0:i1] - cy_) / (c_ * 0.36)
         pm[j0:j1, i0:i1] = np.maximum(pm[j0:j1, i0:i1], np.clip(1.25 - (uu * uu + vv * vv), 0, 1))
     pm = smoothstep(0.25, 0.8, pm * (0.55 + 0.9 * core.fbm(h, w, 26 * k, 3, seed=65, aspect=2.5)))
-    earth = np.float32((0.74, 0.60, 0.42))
+    earth = np.float32((0.70, 0.62, 0.44))
     pcol = mixc(palette.shade(earth * (0.8, 0.9, 1.15), T), np.clip(earth * key, 0, 1), l)
-    col = mixc(col, pcol, pm * 0.8)
+    col = mixc(col, pcol, pm * 0.62)
     # sunlit grass tips along the crest
     rimv = np.exp(-np.maximum(t, 0) / 11.0) * l * (0.4 + 0.6 * smoothstep(0.35, 0.65, core.fbm(h, w, 12 * k, 2, seed=66, aspect=0.5)))
     col = mixc(col, np.clip(T["rim"] * np.float32((1.0, 0.98, 0.62)) + 0.02, 0, 1), np.clip(rimv * 0.85, 0, 1))
     ref = np.ascontiguousarray(np.clip(col, 0, 1), np.float32)
     # stones
     r = core.rng("stones", 2)
-    stone = np.float32((0.62, 0.58, 0.56))
-    for (sxx, dt, rr) in [(1232, 30, 15), (1010, 150, 26), (1950, 60, 17), (2210, 120, 24), (760, 90, 20), (1560, 300, 34), (1265, 46, 8), (2420, 40, 14)]:
+    stone = np.float32((0.74, 0.70, 0.66))
+    for (sxx, dt, rr) in [(1232, 30, 9), (1010, 150, 15), (1950, 60, 10), (2210, 120, 14), (760, 90, 12), (1560, 300, 20), (1265, 46, 5), (2420, 40, 9)]:
         jx, jy = (sxx - x0) * k, (ground_y(float(sxx)) + dt - y0) * k
         li = float(l[min(int(jy), h - 1), min(int(jx), w - 1)])
         cl = mixc(palette.shade(stone, T), np.clip(stone * key, 0, 1), np.float32(0.25 + 0.75 * li))
-        cs = palette.shade(stone * np.float32((0.6, 0.62, 0.9)), T)
-        _blob(ref, None, jx + rr * k * 0.5 * (1 if sx < 0 else -1), jy + rr * k * 0.42, rr * k * 1.5, rr * k * 0.3, cs * 0.8, cs * 0.8, sx, sy, sxx, bump=0.1, a_max=0.6)
+        cs = palette.shade(stone * np.float32((0.72, 0.74, 0.95)), T)
+        _blob(ref, None, jx + rr * k * 0.5 * (1 if sx < 0 else -1), jy + rr * k * 0.42, rr * k * 1.3, rr * k * 0.28, cs * 0.7, cs * 0.7, sx, sy, sxx, bump=0.1, a_max=0.5)
         _blob(ref, None, jx, jy, rr * k, rr * k * 0.62, cl, cs, sx, sy, sxx + 1, bump=0.12)
     # grass grows up, leaning with the slope and in windy clumps
     lean = 1.1 * (core.fbm(h, w, 150 * k, 3, seed=67) - 0.5) + 0.18 * np.sign(X - 1500) * np.clip(np.abs(X - 1500) / 900, 0, 1)
@@ -598,11 +634,11 @@ def paint_hill(tod):
     cys = ground_y(cxs) + r.uniform(-2, 9, m)
     jx, jy = (cxs - x0) * k, (cys - y0) * k
     lc = l[np.clip(jy.astype(int) + 4, 0, h - 1), np.clip(jx.astype(int), 0, w - 1)]
-    gold = np.clip(T["rim"] * np.float32((1.0, 0.98, 0.60)), 0, 1)
     dark = palette.shade((0.22, 0.42, 0.34), T)
-    midg = np.clip(np.float32((0.52, 0.64, 0.24)) * key, 0, 1)
-    u = r.random(m)[:, None]
-    cols = np.where((lc > 0.45)[:, None], mixc(midg, gold, r.random(m) ** 0.7), mixc(dark, dark * 1.5 + 0.03, r.random(m)))
+    midg = desat(np.clip(np.float32((0.52, 0.64, 0.24)) * key, 0, 1), sat)
+    midg = dark + (midg - dark) * (0.35 + 0.65 * direct)
+    gold = midg + (np.clip(T["rim"] * np.float32((1.0, 0.98, 0.60)), 0, 1) - midg) * direct
+    cols = np.where((lc > 0.45 * direct)[:, None], mixc(midg, gold, r.random(m) ** 0.7), mixc(dark, dark * 1.5 + 0.03, r.random(m)))
     paint.strokes(out, jx, jy, -np.pi / 2 + r.normal(0, 0.38, m) + 0.2 * np.sign(cxs - 1500) * 0.5, 2.0 + 2.2 * r.random(m),
                   (12 + 28 * r.random(m) ** 1.5) * k * 0.8, np.clip(cols, 0, 1), op=0.95, bend=r.normal(0, 0.6, m),
                   seed=72, dry=0.2, taper=0.9, streak=0.04, paper_k=0.1)
@@ -647,8 +683,8 @@ LIMBS = [
     [(858, 620, 16), (900, 540, 11), (930, 470, 6)],
 ]
 ROOTS = [
-    [(860, 1085, 50), (826, 1112, 30), (780, 1124, 12), (744, 1128, 4)],
-    [(892, 1090, 50), (936, 1112, 28), (984, 1116, 12), (1020, 1116, 4)],
+    [(860, 1080, 52), (836, 1106, 34), (808, 1122, 16), (790, 1130, 6)],
+    [(892, 1084, 52), (924, 1106, 32), (952, 1120, 15), (970, 1127, 6)],
     [(874, 1100, 40), (872, 1128, 26), (866, 1146, 8)],
 ]
 MASSES = [
@@ -736,7 +772,7 @@ def paint_tree(tod):
     Lz = 0.42
     ln = math.sqrt(sx * sx + sy * sy + Lz * Lz)
     lx, ly, lz = sx / ln, sy / ln, Lz / ln
-    leaf_l = np.float32((0.56, 0.66, 0.22))
+    leaf_l = np.float32((0.52, 0.62, 0.22))
     leaf_m = np.float32((0.32, 0.50, 0.22))
     leaf_d = np.float32((0.20, 0.36, 0.36))
     c_hi = np.clip(leaf_l * key * 1.16 + np.float32((0.06, 0.05, 0.0)), 0, 1)
@@ -744,6 +780,10 @@ def paint_tree(tod):
     c_mid = np.clip(leaf_m * (0.55 * key + 0.5 * amb), 0, 1)
     c_dk = palette.shade(leaf_d, T) * 0.92
     c_deep = palette.shade((0.15, 0.22, 0.36), T) * 0.80
+    direct, sat = look(tod)
+    c_mid = desat(c_dk + (c_mid - c_dk) * (0.45 + 0.55 * direct), sat)
+    c_li = desat(c_mid + (c_li - c_mid) * direct, sat)
+    c_hi = desat(c_mid + (c_hi - c_mid) * direct, sat)
     layers = []
     for z in (0, 1, 2):
         Hf = np.zeros((h, w), np.float32)
@@ -770,19 +810,19 @@ def paint_tree(tod):
                 u, v = (xx - jx) / rr, (yy - jy) / (rr * 0.86)
                 an = np.arctan2(v, u)
                 ph = r.uniform(0, 6.28)
-                edge = 1.0 + 0.16 * np.sin(an * 4 + ph) + 0.10 * np.sin(an * 9 + ph * 1.7) + 0.06 * np.sin(an * 17 + ph * 0.6)
+                edge = 1.0 + 0.15 * np.sin(an * 3 + ph) + 0.09 * np.sin(an * 7 + ph * 1.7) + 0.03 * np.sin(an * 13 + ph * 0.6)
                 rad = np.sqrt(u * u + v * v) / edge
                 dome = np.sqrt(np.clip(1 - rad * rad, 0, 1)) * rr * 0.9 + (q == 0) * rr * 0.1
                 Hf[j0:j1, i0:i1] = np.maximum(Hf[j0:j1, i0:i1], np.where(rad < 1, dome + 6.0 * z, 0))
                 al[j0:j1, i0:i1] = np.maximum(al[j0:j1, i0:i1], np.clip((1 - rad) * rr / 2.0, 0, 1))
         # leaf scale relief and sky holes
-        leafn = core.fbm(h, w, 26 * k, 4, seed=90 + z)
+        leafn = core.fbm(h, w, 38 * k, 3, seed=90 + z)
         leaff = core.fbm(h, w, 8 * k, 3, seed=93 + z)
         holes = core.fbm(h, w, 60 * k, 4, seed=96 + z)
         depth = Hf / (np.maximum(core.gblur(Hf, 40 * k), 1.0) + 40.0)
-        hole = smoothstep(0.36, 0.30, holes + 0.25 * np.clip(Hf / (90.0 * k), 0, 1)) if z > 0 else smoothstep(0.40, 0.34, holes)
+        hole = smoothstep(0.47, 0.41, holes + 0.22 * np.clip(Hf / (90.0 * k), 0, 1)) if z > 0 else smoothstep(0.44, 0.38, holes)
         al = al * (1 - hole)
-        Hs = core.gblur(Hf + 46.0 * k * (leafn - 0.5) + 10.0 * k * (leaff - 0.5), 2.2 * k)
+        Hs = core.gblur(Hf + 30.0 * k * (leafn - 0.5) + 5.0 * k * (leaff - 0.5), 3.0 * k)
         nx = -np.gradient(Hs, axis=1)
         ny = -np.gradient(Hs, axis=0)
         nz = 1.0
@@ -793,12 +833,11 @@ def paint_tree(tod):
         occ = core.gblur(al, 34 * k)
         occ_dir = np.clip(core.gblur(np.roll(np.roll(al, int(-sx * 40 * k), 1), int(-sy * 40 * k), 0), 22 * k), 0, 1)
         lam = lam - 0.35 * occ_dir * occ + 0.12
-        if z == 0:
-            lam = lam - 0.34
-        t_hi = smoothstep(0.66, 0.74, lam)
-        t_li = smoothstep(0.40, 0.47, lam)
-        t_mid = smoothstep(0.12, 0.19, lam)
-        t_dk = smoothstep(-0.20, -0.12, lam)
+        lam = lam - (0.36, 0.10, 0.0)[z]
+        t_hi = smoothstep(0.66, 0.78, lam)
+        t_li = smoothstep(0.38, 0.50, lam)
+        t_mid = smoothstep(0.02, 0.16, lam)
+        t_dk = smoothstep(-0.30, -0.14, lam)
         col = mixc(c_deep, c_dk, t_dk)
         col = mixc(col, c_mid, t_mid)
         col = mixc(col, c_li, t_li)
@@ -826,9 +865,9 @@ def paint_tree(tod):
             if z == 0:
                 colp = mixc(colp, np.broadcast_to(c_dk, colp.shape), np.full(nd, 0.5, np.float32))
             edge_p = occ_p < 0.62
-            keepd = (r.random(nd) < 0.45) | edge_p
+            keepd = (r.random(nd) < 0.30) | edge_p
             paint.strokes(fo, lx_[keepd] + r.normal(0, 3, keepd.sum()), ly_[keepd] + r.normal(0, 3, keepd.sum()), r.uniform(0, 6.283, keepd.sum()),
-                          (5.5 + 5.0 * r.random(keepd.sum())) * k * 0.8, (9 + 10 * r.random(keepd.sum())) * k * 0.8, np.clip(colp[keepd], 0, 1),
-                          op=0.92, bend=r.normal(0, 0.5, keepd.sum()), seed=97 + z, dry=0.15, taper=0.55, streak=0.06, paper_k=0.25)
+                          (4.0 + 3.5 * r.random(keepd.sum())) * k * 0.8, (4.5 + 5.5 * r.random(keepd.sum())) * k * 0.8, np.clip(colp[keepd], 0, 1),
+                          op=0.90, bend=r.normal(0, 0.4, keepd.sum()), seed=97 + z, dry=0.1, taper=0.25, streak=0.06, paper_k=0.25)
         layers.append(fo)
     return [layers[0], trunk, layers[1], layers[2]]

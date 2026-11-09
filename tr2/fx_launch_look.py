@@ -1,5 +1,10 @@
 """Checkpoint still: one lit frame of the launch, about 0.6 s after ignition, on a
-placeholder hill (until the real set exists)."""
+placeholder hill (until the real set exists). Also a contact sheet of the first
+1.2 s to judge how the smoke moves.
+
+    python3 ROOT/tr2/fx_launch_look.py            launch-look.png
+    python3 ROOT/tr2/fx_launch_look.py evolve     launch-evolve.jpg
+"""
 import math
 import os
 import sys
@@ -69,65 +74,73 @@ def placeholder_bg(tod="launch"):
     return pic, gm
 
 
-def run_sim(t_end=0.6, feet_y=None, noz=None):
+def emit_at(t, k, noz):
+    """What the fire does t seconds after ignition (rocket still on the pad)."""
+    gyc = ground(noz[0])
+    emit = dict(x=noz[0], y=noz[1] + 26, r=44.0, jet=(70.0, 1500.0), rate=9.0,
+                burst=150.0 * max(0.0, 1 - t / 0.14), burst_r=120.0, burst_y=gyc - 22.0,
+                burst_d=24.0, burst_heat=0.85,
+                lobes=3 if k % 2 == 0 else 2, lobe_y=gyc - 8.0, lobe_r=(26.0, 74.0), lobe_jit=(70.0, 26.0))
+    # the ignition ring: two fronts racing outward along the ground, slowing as they go
+    puffs = []
+    for sgn, reach, tau, sd in ((-1, 640.0, 0.26, 0), (1, 560.0, 0.22, 1)):
+        X = reach * (1 - math.exp(-t / tau))
+        V = reach / tau * math.exp(-t / tau)
+        px = noz[0] + sgn * X
+        puffs.append(dict(x=px, y=ground(px) - 30.0, r=58.0, d=30.0 * math.exp(-t / 0.5), T=0.22,
+                          u=sgn * V * 0.8, v=-60.0, grip=0.6, flat=0.7,
+                          lobes=(1 if (k + sd) % 3 else 0) if t < 0.8 else 0, lobe_r=(12.0, 34.0)))
+    emit["puffs"] = puffs
+    return emit
+
+
+def run_sim(noz, times):
+    """Yield (t, fields) at each requested time."""
     sim = fx.SmokeSim(384, 216, 5.0, (0.0, 0.0), ground=ground, seed=1)
     dt = 1.0 / 96.0
-    steps = int(round(t_end / dt))
-    gyc = ground(noz[0])
-    for k in range(steps):
-        t = k * dt
-        emit = dict(x=noz[0], y=noz[1] + 26, r=44.0, jet=(70.0, 1500.0), rate=9.0,
-                    burst=150.0 * max(0.0, 1 - t / 0.14), burst_r=120.0, burst_y=gyc - 22.0,
-                    burst_d=24.0, burst_heat=0.85)
-        # the ignition ring: two fronts racing outward along the ground, slowing as they go
-        puffs = []
-        for sgn, reach, tau, sd in ((-1, 640.0, 0.26, 0), (1, 560.0, 0.22, 1)):
-            X = reach * (1 - math.exp(-t / tau))
-            V = reach / tau * math.exp(-t / tau)
-            px = noz[0] + sgn * X
-            puffs.append(dict(x=px, y=ground(px) - 30.0, r=58.0, d=30.0 * math.exp(-t / 0.5), T=0.22,
-                              u=sgn * V * 0.8, v=-60.0, grip=0.6, flat=0.7))
-        emit["puffs"] = puffs
-        sim.step(dt, emit)
-    return sim
+    k = 0
+    for t_end in times:
+        while sim.t < t_end - 1e-6:
+            sim.step(dt, emit_at(sim.t, k, noz))
+            k += 1
+        yield sim.t, sim.fields()
 
 
-def render(path=None, t=0.6, f=886, lift=34.0, save_layers=False):
-    t0 = time.time()
-    tod = "launch"
-    pic, gmask = placeholder_bg(tod)
+def rocket_cel(f, lift, tod="launch"):
     feet = (RX, ground(RX) - lift)
-    st = rocket.State(light=1.0, flame=1.0, fin_rattle=0.8, squash=-0.25, shake=(3.0, -2.0, 0.012))
+    st = rocket.State(light=1.0, flame=1.0, fin_rattle=0.8, squash=-0.25 if lift > 5 else 0.3,
+                      shake=(3.0, -2.0, 0.012))
     cel = core.Cel()
     info = rocket.draw(cel, feet[0], feet[1], s=S, tod=tod, drawing=f, view="low34", state=st)
     rocket.draw_glass(cel, info, tod, f)
-    rk = cel.rgba()
+    return cel.rgba(), info
+
+
+def compose(bg, gmask, rk, info, fields, t, f, tod="launch"):
+    pic = bg.copy()
     noz = info["nozzle"]
-    print("rocket %.1fs  nozzle %s tip %s" % (time.time() - t0, noz, info["tip"]))
-    sim = run_sim(t, feet[1], noz)
-    print("sim %.1fs  dmax %.2f Fmax %.2f" % (time.time() - t0, sim.d.max(), sim.F.max()))
     gx, gy = noz[0], ground(noz[0])
-    lay = fx.smoke_layers(sim.fields(), f, tod, 5.0, 0.0, 0.0, seed=1, fire_xy=(gx, gy - 30))
-    print("smoke render %.1fs" % (time.time() - t0))
-    heat = lay["heat"]
-    gx, gy = noz[0], ground(noz[0])
-    # fire light on the grass, and a little on everything near it
-    fx.ground_light(pic, gx, gy + 30, 560.0, (1.0, 0.62, 0.26), 1.0, squash=0.42, mask=gmask)
+    lay = fx.smoke_layers(fields, f, tod, 5.0, 0.0, 0.0, seed=1, fire_xy=(gx, gy - 24),
+                          jet=(noz[0], noz[1] - 4, noz[0] + 6, gy - 10, 33.0, 60.0))
+    # fire light on the grass: a warm pool fading out, and a little on the air near it
+    fx.ground_light(pic, gx, gy + 40, 600.0, (1.0, 0.60, 0.24), 0.75, squash=0.40, mask=gmask)
+    fx.ground_light(pic, gx, gy + 14, 250.0, (1.0, 0.56, 0.20), 0.9, squash=0.34, mask=gmask)
     fx.glow_at(pic, gx, gy - 40, 420.0, (1.0, 0.62, 0.30), 0.30, squash=0.7)
-    # back smoke, the rocket, then the low front rolls that swallow the legs
+    # back smoke, the rocket, the flame, then the low front rolls that swallow the legs
     core.over(pic, lay["smoke"])
     core.over(pic, rk)
     yy = np.arange(H, dtype=np.float32)[:, None]
     xx = np.arange(W, dtype=np.float32)[None, :]
     wob = core.fbm(H, W, 90.0, 3, seed=44)
-    front_line = gy - 74.0 + (wob - 0.5) * 70.0 - 26.0 * np.exp(-((xx - gx) / 170.0) ** 2)
+    front_line = gy - 74.0 + (wob - 0.5) * 70.0 + 62.0 * np.exp(-((xx - gx) / 130.0) ** 2)
     fm = np.clip((yy - front_line) / 1.5, 0, 1).astype(np.float32)
-    core.over(pic, lay["smoke"] * fm[..., None])
     core.over(pic, lay["flame"])
+    core.over(pic, lay["smoke"] * fm[..., None])
+    core.over(pic, lay["jet"])
     sp = fx.sparks_layer(t, (gx, gy - 12), seed=5, n=330, ground_y=lambda x: ground(x) + 6, frame=f)
     core.over(pic, sp)
-    fx.glow_at(pic, noz[0], noz[1] + 60, 110.0, (1.0, 0.80, 0.45), 0.55)
-    fx.bloom(pic, 0.80, 12.0, 0.62)
+    fx.glow_at(pic, noz[0], noz[1] + 60, 120.0, (1.0, 0.72, 0.36), 0.26)
+    fx.bloom(pic, 0.82, 11.0, 0.5)
     # a light grade and vignette so the still reads as a frame
     lift_, gain, sat = palette.TOD[tod]["grade"]
     pic[:] = np.clip(pic * gain + lift_, 0, 1)
@@ -135,10 +148,35 @@ def render(path=None, t=0.6, f=886, lift=34.0, save_layers=False):
     pic[:] = np.clip(g + (pic - g) * sat, 0, 1)
     vg = 1 - 0.22 * (((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) ** 1.2
     pic *= vg[..., None]
-    core.save(path or os.path.join(REVIEW, "launch-look.png"), pic, seed=f)
-    print("total %.1fs" % (time.time() - t0))
     return pic
 
 
+def render(path=None, t=0.6, f=886, lift=34.0):
+    t0 = time.time()
+    bg, gmask = placeholder_bg()
+    rk, info = rocket_cel(f, lift)
+    (ts, fields), = run_sim(info["nozzle"], [t])
+    t1 = time.time()
+    pic = compose(bg, gmask, rk, info, fields, ts, f)
+    print("setup and sim %.1fs, frame composite %.1fs, lobes %d" % (t1 - t0, time.time() - t1, len(fields["lobes"])))
+    core.save(path or os.path.join(REVIEW, "launch-look.png"), pic, seed=f)
+    return pic
+
+
+def evolve(path=None):
+    bg, gmask = placeholder_bg()
+    times = [0.04, 0.125, 0.25, 0.42, 0.6, 0.83, 1.0, 1.25]
+    pics = []
+    rk0, info0 = rocket_cel(872, 0.0)
+    for t, fields in run_sim(info0["nozzle"], times):
+        f = 872 + int(round(t * 24))
+        rk, info = rocket_cel(f, 0.0)
+        pics.append(compose(bg, gmask, rk, info, fields, t, f))
+    core.sheet(pics, 4, 640, path or os.path.join(REVIEW, "launch-evolve.jpg"))
+
+
 if __name__ == "__main__":
-    render()
+    if len(sys.argv) > 1 and sys.argv[1] == "evolve":
+        evolve()
+    else:
+        render()
