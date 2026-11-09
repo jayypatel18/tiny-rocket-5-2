@@ -1,0 +1,207 @@
+{
+ "fps": 24,
+ "duration": 74.0,
+ "shots": [
+  {
+   "name": "s1_knot",
+   "start": 0.0,
+   "end": 6.0,
+   "light": "dusk"
+  },
+  {
+   "name": "s2_hill",
+   "start": 6.0,
+   "end": 14.0,
+   "light": "dusk"
+  },
+  {
+   "name": "s3_night",
+   "start": 14.0,
+   "end": 21.5,
+   "light": "night"
+  },
+  {
+   "name": "s4a_wake",
+   "start": 21.5,
+   "end": 25.0,
+   "light": "predawn"
+  },
+  {
+   "name": "s4b_goggles",
+   "start": 25.0,
+   "end": 28.5,
+   "light": "predawn"
+  },
+  {
+   "name": "s5a_match",
+   "start": 28.5,
+   "end": 30.5,
+   "light": "predawn"
+  },
+  {
+   "name": "s5b_fuse",
+   "start": 30.5,
+   "end": 33.0,
+   "light": "predawn"
+  },
+  {
+   "name": "s5c_breath",
+   "start": 33.0,
+   "end": 36.0,
+   "light": "predawn"
+  },
+  {
+   "name": "s6_lift",
+   "start": 36.0,
+   "end": 43.0,
+   "light": "launch"
+  },
+  {
+   "name": "s7a_clouds",
+   "start": 43.0,
+   "end": 46.5,
+   "light": "sunrise"
+  },
+  {
+   "name": "s7b_wonder",
+   "start": 46.5,
+   "end": 50.0,
+   "light": "sunrise"
+  },
+  {
+   "name": "s8_star",
+   "start": 50.0,
+   "end": 58.5,
+   "light": "sunrise"
+  },
+  {
+   "name": "s9a_home",
+   "start": 58.5,
+   "end": 62.0,
+   "light": "morning"
+  },
+  {
+   "name": "s9b_out",
+   "start": 62.0,
+   "end": 65.0,
+   "light": "morning"
+  },
+  {
+   "name": "s9c_paint",
+   "start": 65.0,
+   "end": 67.5,
+   "light": "morning"
+  },
+  {
+   "name": "s9d_title",
+   "start": 67.5,
+   "end": 74.0,
+   "light": "morning"
+  }
+ ],
+ "cues": {
+  "knot_creak": [
+   0.0,
+   1.2
+  ],
+  "knot_tug": 1.25,
+  "ear_flicks": [
+   1.9,
+   2.3
+  ],
+  "tail_swish": 2.6,
+  "blinks": [
+   3.6,
+   4.1
+  ],
+  "pleased_breath": 4.6,
+  "motif_first": 6.5,
+  "steps_back": [
+   7.4,
+   7.9,
+   8.4
+  ],
+  "village_lights": [
+   7.0,
+   13.5
+  ],
+  "admire": 9.0,
+  "steps_to_map": [
+   10.6,
+   11.1,
+   11.6
+  ],
+  "map_rustle": 12.2,
+  "night_starts": 14.0,
+  "shooting_star_night": [
+   17.2,
+   18.0
+  ],
+  "ear_twitch_sleep": 19.3,
+  "wake": 21.8,
+  "yawn_stretch": 22.4,
+  "climb_paws": [
+   23.4,
+   23.9
+  ],
+  "into_cup": 24.5,
+  "goggles_snap": 25.7,
+  "swallow": 26.9,
+  "nod": 27.8,
+  "match_strike": 29.0,
+  "fuse_lit": 30.0,
+  "fuse_run": [
+   30.0,
+   33.9
+  ],
+  "eyes_shut": 33.2,
+  "fuse_end": 33.9,
+  "stillness": [
+   34.0,
+   35.6
+  ],
+  "one_eye_opens": 35.3,
+  "ignition": 36.3,
+  "shudder": [
+   36.3,
+   37.6
+  ],
+  "liftoff": 37.6,
+  "passes_tree": 39.0,
+  "birds_burst": 39.5,
+  "into_first_clouds": 42.0,
+  "clouds_start": 43.0,
+  "break_into_open_sky": 46.2,
+  "wind_face": 46.5,
+  "wonder": 48.4,
+  "vista": 50.0,
+  "star_ignites": 51.0,
+  "star_arc": [
+   51.0,
+   57.5
+  ],
+  "parachute": 58.5,
+  "touchdown": 61.3,
+  "climb_out": 62.4,
+  "paws_grass_home": [
+   63.4,
+   63.8
+  ],
+  "looks_up": 64.2,
+  "brush_stroke": 66.4,
+  "looks_at_us": 67.9,
+  "tail_curl": 68.6,
+  "title_brush": [
+   69.0,
+   70.6
+  ],
+  "hanko": 70.9,
+  "credit_brush": [
+   71.3,
+   72.0
+  ],
+  "fade_to_paper": 72.6,
+  "fade_to_black": 73.4,
+  "end": 74.0
+ }
+}
