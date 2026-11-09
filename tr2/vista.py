@@ -465,7 +465,9 @@ def render(cam, f, t, star=None):
     below = sp.ss(-4.0, 30.0, ys - hz)
     layers = _layers()
     for li, (z, x0, y0, layer) in enumerate(layers):
-        _place(pic, cam, _par(z), x0, y0, layer)
+        # the cloud rows drift slowly left on the wind, nearer ones faster (mountains and floor stay)
+        dx = -t * (1.0 + 2.4 * _par(z)) if (li > 0 and x0 == -M) else 0.0
+        _place(pic, cam, _par(z), x0 + dx, y0, layer)
         if li == 0:
             # rivers (on the floor, under the cloud rows): a faint shimmer always,
             # a blaze when the star passes over
@@ -480,10 +482,10 @@ def render(cam, f, t, star=None):
                 core.add_light(pic, core.gblur((glw * near).astype(np.float32), 5.0), (1.0, 0.85, 0.55), min(1.0, 0.7 * star[2]))
     if star is not None:
         sx_, sy_, pw = star
-        d2 = ((xs - sx_) / 520.0) ** 2 + ((ys - (hz + 120.0)) / 150.0) ** 2
+        d2 = ((xs - sx_) / 400.0) ** 2 + ((ys - (hz + 105.0)) / 120.0) ** 2
         pool = np.exp(-d2) * below * pw
         lumc = pic.mean(-1)
-        core.add_light(pic, (pool * (0.35 + 0.65 * lumc)).astype(np.float32), (1.0, 0.86, 0.60), 0.38)
+        core.add_light(pic, (pool * (0.35 + 0.65 * lumc)).astype(np.float32), (1.0, 0.84, 0.56), 0.62)
 
     # the air on top: haze on the horizon, the thin line of atmosphere, sun bloom over the sea
     sx = SUN_X * s0 + tx0

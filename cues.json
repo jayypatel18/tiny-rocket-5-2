@@ -145,6 +145,7 @@
    23.9
   ],
   "into_cup": 24.5,
+  "hatch_close": 24.85,
   "goggles_snap": 25.7,
   "swallow": 26.9,
   "nod": 27.8,
@@ -182,7 +183,9 @@
   ],
   "parachute": 58.5,
   "touchdown": 61.3,
+  "hatch_open_home": 62.15,
   "climb_out": 62.4,
+  "soot_shake": 62.65,
   "paws_grass_home": [
    63.4,
    63.8

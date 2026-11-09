@@ -103,30 +103,31 @@ def _star(pic, cam, t, fl, t_ign, t_end):
     age = (x - _x_of_u(q)) * span
     P = _bez3(ARC, q)
     wob = core.fbm_at(q * 14.0, q * 0 + 0.7, 1.0, 3, 62) - 0.5
-    P[:, 1] += 7.0 * np.minimum(age, 4.0) + wob * 5.0 * np.minimum(age, 3.0)
-    P[:, 0] += wob * 3.0 * np.minimum(age, 3.0)
+    P[:, 1] += 5.0 * np.minimum(age, 5.0) + wob * 2.2 * np.minimum(age, 3.0)
+    P[:, 0] += wob * 1.5 * np.minimum(age, 3.0)
     S = _screen(cam, P)
     seg = np.r_[np.hypot(*np.diff(S, axis=0).T), 1.0]
     k = 0.35 + 0.65 * np.exp(-age / 3.2)
     hot = np.exp(-age / 0.28)
-    amp = seg * (0.20 * k + 0.85 * hot) * np.clip(q * 30.0, 0, 1)
-    rad = 1.5 + 4.2 * hot + 1.6 * np.minimum(age, 3.0) / 3.0
+    warm = np.exp(-age / 1.3)
+    amp = seg * (0.16 * k + 0.42 * warm + 0.9 * hot) * np.clip(q * 30.0, 0, 1)
+    rad = 1.25 + 5.2 * np.exp(-age / 0.45) + 2.4 * np.exp(-age / 2.4)
     col = np.empty((n, 3))
-    a1 = np.clip(age / 0.5, 0, 1)[:, None]
-    a2 = np.clip((age - 0.5) / 1.6, 0, 1)[:, None]
-    a3 = np.clip((age - 2.1) / 2.5, 0, 1)[:, None]
+    a1 = np.clip(age / 0.8, 0, 1)[:, None]
+    a2 = np.clip((age - 0.8) / 2.6, 0, 1)[:, None]
+    a3 = np.clip((age - 3.4) / 3.0, 0, 1)[:, None]
     c = np.array([1.0, 0.98, 0.90]) * (1 - a1) + np.array([1.0, 0.84, 0.52]) * a1
     c = c * (1 - a2) + np.array([1.0, 0.62, 0.58]) * a2
     c = c * (1 - a3) + np.array([0.62, 0.56, 0.98]) * a3
     col[:] = c
     skymod._splat(glow, S[:, 0], S[:, 1], rad, col, amp)
     wide = np.zeros_like(pic)
-    skymod._splat(wide, S[::6, 0], S[::6, 1], 7.0 + 0 * rad[::6], col[::6], seg[::6] * 6 * 0.026 * (k[::6] + 2.5 * hot[::6]))
+    skymod._splat(wide, S[::6, 0], S[::6, 1], 7.0 + 0 * rad[::6], col[::6], seg[::6] * 6 * 0.030 * (k[::6] + 1.5 * warm[::6] + 2.5 * hot[::6]))
     glow += core.gblur(wide, 4.0)
 
     # glitter shed along the way: it falls, twinkles and dies
     r = core.rng("glitter", 8)
-    m = 1700
+    m = 2800
     gq = r.uniform(0, 1, m) ** 0.85
     life = r.uniform(0.9, 3.4, m)
     vx = r.normal(0, 9.0, m)
@@ -147,7 +148,7 @@ def _star(pic, cam, t, fl, t_ign, t_end):
         GS = _screen(cam, G)
         tw = 0.55 + 0.45 * np.sin(ga_ * fr[on] + ph[on])
         e = (1 - ga_ / lf) ** 1.4
-        gamp = (0.35 + 1.6 * gb[on]) * e * tw
+        gamp = (0.45 + 1.8 * gb[on]) * e * tw
         grad = 0.75 + 1.0 * gb[on]
         gc = np.empty((len(ga_), 3))
         gc[:] = (1.0, 0.93, 0.72)

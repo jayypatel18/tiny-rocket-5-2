@@ -21,7 +21,7 @@ NAME = "s6_lift"
 TOD = "launch"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE = os.path.join(ROOT, "build", "cache", "fx", "s6")
-SIM_VERSION = 5
+SIM_VERSION = 6
 RX = common.ROCKET_X
 IGN = common.cue("ignition", NAME)
 LIFT = common.cue("liftoff", NAME)
@@ -171,12 +171,12 @@ def build_sim(n_frames=N_SIM, log=True, force=False):
                           follow=(0.10, 0.9), key=1, pw=2.7, kids=4)
             if tau > 0:
                 # the column under the climbing rocket: born in the jet, thrown down, then it hangs and widens
-                acc[3] += 165.0 * dt
+                acc[3] += 150.0 * dt
                 n = int(acc[3])
                 acc[3] -= n
-                lob.spawn(t, noz[0], noz[1] + 26.0 * sc, n, r=(8.0 * sc, 48.0 * sc), jit=(12.0 * sc, 10.0 * sc),
-                          vel=(0.0, 540.0 * sc), vjit=(75.0 * sc, 120.0 * sc), life=(3.2, 6.0), rise=-8.0, grow=1.7,
-                          follow=(0.5, 0.9), key=9, pw=2.5, up_only=False, kids=2, kid_min=22.0 * sc)
+                lob.spawn(t, noz[0], noz[1] + 26.0 * sc, n, r=(16.0 * sc, 100.0 * sc), jit=(26.0 * sc, 20.0 * sc),
+                          vel=(0.0, 540.0 * sc), vjit=(120.0 * sc, 140.0 * sc), life=(3.4, 6.2), rise=-8.0, grow=2.0,
+                          follow=(0.15, 0.45), key=9, pw=2.0, up_only=False, kids=3, kid_min=40.0 * sc)
             lob.step(t, dt, sim)
         t = k * dt
         tmp = _path(fl) + ".tmp.npz"
@@ -215,19 +215,19 @@ def cloud_bank():
         lob = fx_smoke.Lobes(seed=77)
         y_end = gy() - height(7.0)
         base = y_end + 190.0
-        # the bank: a deck of big lobes, its underside scalloped
-        for i in range(34):
-            x = 700.0 + i * 78.0 + rg.normal(0, 30)
-            dip = 70.0 * math.sin(i * 0.9) + rg.normal(0, 26)
-            lob.spawn(-100.0, x, base + dip - 130.0, 4, r=(60.0, 230.0), jit=(60.0, 110.0), life=(1e6, 1e6),
-                      rise=0.0, grow=0.0, key=i, pw=1.6)
-            lob.spawn(-100.0, x, base + dip - 420.0, 3, r=(150.0, 330.0), jit=(80.0, 150.0), life=(1e6, 1e6),
-                      rise=0.0, grow=0.0, key=100 + i, pw=1.2)
-        # the first small clouds on the way up
-        for j, (x, y, n, rr) in enumerate(((1230.0, base + 520.0, 9, 70.0), (2330.0, base + 380.0, 11, 80.0),
-                                           (1560.0, base + 250.0, 7, 46.0), (2120.0, base + 760.0, 6, 40.0))):
-            lob.spawn(-100.0, x, y, n, r=(rr * 0.3, rr), jit=(rr * 1.9, rr * 0.4), life=(1e6, 1e6), rise=0.0,
-                      grow=0.0, key=300 + j, pw=1.5, up_only=False)
+        # the bank: a deck of heaped lobes, every one crowned with smaller ones, its underside scalloped
+        for i in range(30):
+            x = 640.0 + i * 88.0 + rg.normal(0, 34)
+            dip = 80.0 * math.sin(i * 0.9) + rg.normal(0, 30)
+            lob.spawn(-100.0, x, base + dip - 150.0, 3, r=(50.0, 190.0), jit=(70.0, 90.0), life=(1e6, 1e6),
+                      rise=0.0, grow=0.0, key=i, pw=1.5, kids=5, kid_min=0.0)
+            lob.spawn(-100.0, x, base + dip - 470.0, 2, r=(170.0, 330.0), jit=(80.0, 150.0), life=(1e6, 1e6),
+                      rise=0.0, grow=0.0, key=100 + i, pw=1.2, kids=4, kid_min=0.0)
+        # the first small clouds on the way up: flat heaps, never a row of beads
+        for j, (x, y, n, rr) in enumerate(((1180.0, base + 560.0, 6, 86.0), (2360.0, base + 400.0, 7, 96.0),
+                                           (2180.0, base + 820.0, 4, 54.0))):
+            lob.spawn(-100.0, x, y, n, r=(rr * 0.45, rr), jit=(rr * 1.5, rr * 0.22), life=(1e6, 1e6), rise=0.0,
+                      grow=0.0, key=300 + j, pw=1.3, up_only=True, kids=5, kid_min=0.0)
         _bank = (lob.alive(0.0), base)
     return _bank
 
@@ -355,7 +355,7 @@ def render(fl, n, f):
     bank, base = cloud_bank()
     if (base + 900.0) * s + ty > -40:
         ctod = palette.blend_tod("launch", "sunrise", 0.45)
-        cl = fx_smoke.render(bank, 0.0, f, ctod, (s, tx, ty), seed=31, soft=5.0, haze=0.40, warm_top=0.5)
+        cl = fx_smoke.render(bank, 0.0, f, ctod, (s, tx, ty), seed=31, soft=9.0, haze=0.45, warm_top=0.55)
         hid = core.smooth(core.span((base - (g0 - m["H"])), -40.0, 120.0))     # how deep the rocket is in the bank
         if hid > 0.02:
             fx.glow_at(pic, noz[0], noz[1], 150.0 * s, (1.0, 0.70, 0.40), 0.5 * hid)

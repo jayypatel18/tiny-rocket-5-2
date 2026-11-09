@@ -326,7 +326,7 @@ def render_front(cam, f, t, climb, rate=RATE):
         n = core.fbm(H // 4, W // 4, 46, 4, 77, oy=-A * 0.9, aspect=0.35)
         n2 = core.fbm(H // 4, W // 4, 150, 3, 78, oy=-A * 0.5)
         m = np.clip(0.35 + 1.5 * (n - 0.5) + 0.8 * (n2 - 0.5), 0, 1)
-        m = ndimage.zoom(m, 4, order=1)[:H, :W] * th * 0.85
+        m = ndimage.zoom(m, 4, order=1)[:H, :W] * th * 0.72
         col = _in_cloud(np.float32(min(1.0, light + 0.12)))
         core.over_rgba(out, core.premul(np.broadcast_to(col, (H, W, 3)).astype(np.float32).copy(), m.astype(np.float32)))
     return out

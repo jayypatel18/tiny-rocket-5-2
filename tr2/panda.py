@@ -811,7 +811,17 @@ def _eyes(p, ball, env, pose, hm, s, anchors):
         def put(q, frm=frm):
             return _put(frm, np.asarray(q, np.float64).reshape(-1, 2), s)
 
-        if opn < 0.1 or pose.squeeze > 0.5:
+        if pose.squeeze > 0.5:
+            # screwed shut: two heavy strokes that meet toward the nose, like > <
+            tipq = np.array([-sd * 0.62 * ew, 0.10 * eh])
+            for oy, wk in ((-0.62, 2.9), (0.60, 2.3)):
+                o0 = np.array([sd * 0.98 * ew, oy * eh])
+                midq = (o0 + tipq) / 2 + np.array([0.0, -oy * 0.16 * eh])
+                p.ink(put(_arc3(o0, midq, tipq, 9)), w * wk, taper=(0.25, 0.08), lightdir=False)
+            p.ink(put([np.array([sd * 1.1 * ew, -0.95 * eh]), np.array([sd * 1.5 * ew, -1.25 * eh])]), w * 1.1,
+                  taper=(0.1, 0.5), lightdir=False)
+            continue
+        if opn < 0.1:
             u = np.linspace(-1, 1, 24)
             up = pose.eye_smile > 0.3 or pose.squeeze > 0.5
             xs = ew * 1.12 * u
@@ -955,7 +965,8 @@ def _limb(cel, env, ctrl, hw, col, s, toes=0, toe_dir=None, extra=None, d_sh=Non
     if toes:
         # a small clump of fur at the elbow breaks the line of the arm
         ie = int(0.52 * (len(c) - 1))
-        side_pts = L if np.hypot(*(L[ie] - c[0])) > np.hypot(*(R[ie] - c[0])) else R
+        ch = (c[0] + c[-1]) / 2                         # the outside of the bend is the side away from the chord
+        side_pts = L if np.hypot(*(L[ie] - ch)) > np.hypot(*(R[ie] - ch)) else R
         od = side_pts[ie] - c[ie]
         od /= max(np.hypot(*od), 1e-6)
         p.fill(core.catmull([side_pts[ie - 4], side_pts[ie - 1] + od * 2.6 * s, side_pts[ie + 2] + od * 1.2 * s,

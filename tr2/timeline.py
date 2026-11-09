@@ -52,6 +52,7 @@ CUES = {
     "yawn_stretch": 22.4,
     "climb_paws": [23.4, 23.9],        # paws on tin and paper
     "into_cup": 24.5,
+    "hatch_close": 24.85,              # the kettle lid drops shut with a tinny clank
     "goggles_snap": 25.7,
     "swallow": 26.9,
     "nod": 27.8,
@@ -82,7 +83,9 @@ CUES = {
     # shot 9: home (morning)
     "parachute": 58.5,                 # creak and flutter of the paper umbrella
     "touchdown": 61.3,
+    "hatch_open_home": 62.15,          # the kettle lid tips back, a squeak
     "climb_out": 62.4,
+    "soot_shake": 62.65,               # it shakes the soot off its head, a soft flutter
     "paws_grass_home": [63.4, 63.8],
     "looks_up": 64.2,
     "brush_stroke": 66.4,              # the paw paints the new star: one soft piano note

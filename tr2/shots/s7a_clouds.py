@@ -54,46 +54,57 @@ def _flame(cel, x, y, rot, s, drawing, power=1.0):
 
 def _smoke(pic, x_of, y0, A, light, drawing, s):
     """The smoke column left behind: cel lobes strung down the frame, each one
-    left where it was born, so the whole column streams down with the clouds."""
-    SP = 44.0
-    cel = core.Cel(ss=2)
+    left where it was born, so the whole column streams down with the clouds.
+    One silhouette, one hard shadow on the side away from the sun, a thin rim."""
+    from PIL import ImageChops
+    SP = 40.0
+    bx0, by0 = int(x_of(0) - 460), int(max(0, y0 - 80))
+    cel = core.Cel(w=920, h=max(H - by0, 8), ss=2, x0=bx0, y0=by0)
     tones = cloudset._tones(min(1.0, light * 0.8 + 0.2))
     base, shade, rimc = tones[3], tones[1], tones[4]
-    hot = np.array([1.0, 0.78, 0.46], np.float32)
+    hot = np.array([1.0, 0.80, 0.50], np.float32)
     k1 = int(math.floor(A / SP))
     lobes = []
-    for k in range(k1, k1 - 40, -1):
+    for k in range(k1, k1 - 44, -1):
         age = A - k * SP                                    # px since this puff was shed
         y = y0 + age
         r = core.rng("smoke7", k)
-        rad = (20.0 + 3.6 * age ** 0.62) * s * r.uniform(0.8, 1.25)
+        rad = (24.0 + 4.2 * age ** 0.60) * s * r.uniform(0.8, 1.25)
         if y - rad > H + 20:
             break
-        x = x_of(k) + r.uniform(-1, 1) * (8.0 + 0.10 * age) * s + 26.0 * s * math.sin(k * 0.7) * min(1.0, age / 300.0)
+        x = x_of(k) + r.uniform(-1, 1) * (10.0 + 0.16 * age) * s + 30.0 * s * math.sin(k * 0.7) * min(1.0, age / 300.0)
         lobes.append((x, y, rad, age, k))
+    union = None
+    half = None
     for (x, y, rad, age, k) in reversed(lobes):             # oldest first, the fresh ones on top
         r = core.rng("smoke7b", k, drawing // 2 % 3)
-        heat = math.exp(-age / 150.0)
-        col = palette.mix(base, hot, 0.85 * heat)
-        scol = palette.mix(shade, np.array([0.86, 0.48, 0.30], np.float32), 0.7 * heat)
-        blobs = []
-        for q in range(5):
+        heat = math.exp(-age / 170.0)
+        col = palette.mix(base, hot, 0.9 * heat)
+        for q in range(3):
             a = r.uniform(0, 6.28)
-            d = rad * r.uniform(0.15, 0.75)
-            rr = rad * r.uniform(0.5, 0.85)
-            blobs.append(core.wobble(core.ellipse(x + math.cos(a) * d * 1.25, y + math.sin(a) * d * 0.8, rr,
-                                                  rr * r.uniform(0.85, 1.0), 26), rad * 0.05, k * 13 + q, 0.02))
-        for pts in blobs:
+            d = rad * r.uniform(0.1, 0.6)
+            rr = rad * r.uniform(0.6, 0.9)
+            pts = core.wobble(core.ellipse(x + math.cos(a) * d * 1.2, y + math.sin(a) * d * 0.7, rr,
+                                           rr * r.uniform(0.86, 1.0), 28), rad * 0.06, k * 13 + q, 0.02)
             cel.fill(pts, col)
-        for q, pts in enumerate(blobs):
             m = cel.mask(pts)
-            rr = rad * 0.6
-            cel.crescent(pts, scol, (rr * 0.5, -rr * 0.30), clip=m)           # shadow on the side away from the sun
-            if q == 0:
-                cel.crescent(pts, palette.mix(rimc, hot, heat), (-rr * 0.12, rr * 0.08), clip=m)
+            union = m if union is None else ImageChops.lighter(union, m)
+            if (k + q) % 3 == 0:
+                half = m if half is None else ImageChops.lighter(half, m)
+    if union is not None:
+        ss = cel.ss
+        scol = palette.mix(shade, np.array([0.80, 0.50, 0.40], np.float32), 0.25)
+        dx, dy = int(26 * s * ss), int(-12 * s * ss)
+        sh = ImageChops.subtract(union, ImageChops.offset(union, dx, dy))
+        cel.paste(scol, sh)
+        if half is not None:
+            sh2 = ImageChops.multiply(ImageChops.subtract(half, ImageChops.offset(half, int(dx * 0.6), int(dy * 0.6))), union)
+            cel.paste(scol, sh2, 0.75)
+        rim = ImageChops.subtract(union, ImageChops.offset(union, int(-5 * s * ss), int(3 * s * ss)))
+        cel.paste(palette.mix(rimc, hot, 0.3), rim)
     lay = cel.rgba()
-    lay *= 0.94
-    core.over(pic, lay)
+    lay *= 0.96
+    core.over(pic, lay, bx0, by0)
 
 
 def render(fl, n, f):
@@ -117,30 +128,32 @@ def render(fl, n, f):
     sway_x = 46.0 * core.noise1(t * 0.9, 71) + 18.0 * core.noise1(t * 2.3, 72)
     surge = 70.0 * core.overshoot(core.span(since, -0.12, 0.45), 2.2) if since > -0.12 else 0.0
     rx = W / 2 + sway_x
-    ry = 800.0 - 36.0 * core.smooth(t / T) + 14.0 * core.noise1(t * 1.3, 73) - surge
+    ry = 668.0 - 30.0 * core.smooth(t / T) + 14.0 * core.noise1(t * 1.3, 73) - surge
     rot = 0.06 * core.noise1(t * 1.1, 74) + 0.02 * sway_x / 46.0
     rr = core.rng("rattle7", fl)
     from .. import rocket
     st = rocket.State(fin_rattle=1.0, flame=1.0, light=1.0,
                       shake=(float(rr.normal(0, 2.6)), float(rr.normal(0, 2.0)), float(rr.normal(0, 0.012))))
-    s = 0.78
+    s = 0.86
     sx, tx, ty = cam.xf(1.0)
     px, py = rx * sx + tx, ry * sx + ty
-    cel = core.Cel(ss=2)
+    cx0, cy0 = int(px - 330), int(py - 700)
+    cel = core.Cel(w=660, h=860, ss=2, x0=cx0, y0=cy0)
     try:
         info = rocket.draw(cel, px, py, s=s * sx, tod=tod, drawing=fl, rot=rot, view="side", state=st)
     except Exception as e:  # noqa
         print("s7a rocket with blended light:", repr(e)[:160])
-        cel = core.Cel(ss=2)
+        cel = core.Cel(w=660, h=860, ss=2, x0=cx0, y0=cy0)
         info = rocket.draw(cel, px, py, s=s * sx, tod="sunrise", drawing=fl, rot=rot, view="side", state=st)
     nx, ny = info["nozzle"]
     # smoke and flame go behind the rocket
-    fcel = core.Cel(ss=2)
+    fx0, fy0 = int(nx - 280), int(ny - 80)
+    fcel = core.Cel(w=560, h=720, ss=2, x0=fx0, y0=fy0)
     tail = _flame(fcel, nx, ny, rot, s * sx * 1.25, fl, power=1.0 + 0.25 * burst)
-    _smoke(pic, lambda k: px + 30.0 * math.sin(k * 0.23) * 0.4, tail[1] - 30.0, A, light, fl, s * sx)
+    _smoke(pic, lambda k: px + 12.0 * math.sin(k * 0.23), tail[1] - 30.0, A, light, fl, s * sx)
     from .. import fx
     fx.glow_at(pic, nx, ny + 60 * s, 150.0 * s, (1.0, 0.62, 0.25), 0.55)
-    core.over(pic, fcel.rgba())
+    core.over(pic, fcel.rgba(), fx0, fy0)
     fx.glow_at(pic, nx, ny + 30 * s, 46.0 * s, (1.0, 0.9, 0.6), 0.6)
     # the spray of mist it drags out of the deck
     if -0.05 < since < 0.8:
@@ -153,7 +166,7 @@ def render(fl, n, f):
             v = r.uniform(380.0, 1150.0)
             kind = ("cumulus", "wisp", "cumulus")[k % 3]
             x = px + math.cos(ang) * v * (1 - math.exp(-tau * 3.0)) / 3.0 * 1.4
-            y = py - 190.0 + math.sin(ang) * v * (1 - math.exp(-tau * 3.0)) / 3.0 + 1500.0 * tau * tau + 250.0 * tau
+            y = py - 120.0 + math.sin(ang) * v * (1 - math.exp(-tau * 3.0)) / 3.0 + 1500.0 * tau * tau + 250.0 * tau
             sc = r.uniform(0.16, 0.42) * (1 + 1.6 * tau)
             sp.place(lay, kind, int(r.integers(0, 6)), x, y, sc, cols, op=max(0.0, 1 - tau / 0.75) ** 1.2 * 0.9,
                      flip=bool(k % 2))
@@ -163,7 +176,7 @@ def render(fl, n, f):
         rocket.draw_glass(cel, info, tod if isinstance(tod, str) else "sunrise", fl)
     except Exception as e:  # noqa
         print("s7a glass:", repr(e)[:120])
-    core.over(pic, cel.rgba())
+    core.over(pic, cel.rgba(), cx0, cy0)
 
     # near cloud and wisps whip past the lens
     core.over(pic, cloudset.render_front(cam, f, t, climb))
