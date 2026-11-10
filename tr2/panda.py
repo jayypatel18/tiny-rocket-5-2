@@ -1416,62 +1416,72 @@ def pose_at(keys, t, ease=core.smooth):
 
 # ------------------------------------------------------------ shot 9c: the paw
 def draw_paw_closeup(cel, x, y, s=1.0, tod="morning", drawing=0, paint=1.0, press=0.0):
-    """A forearm and paw reaching in from the lower right. One toe is extended
-    and its tip touches (x, y); it carries a dab of gold paint (paint 0..1).
-    press 0..1 flattens the toe tip on the paper. About 620 px long at s = 1."""
-    env = _Env(tod, 3.4 * s, drawing, None)
-    env.pad = int(30 * s) + 8
+    """Shot 9c: a forearm and paw reaching in from the lower right, seen from
+    above. A ruff of fur at the wrist, a mitten paw with four toes: three
+    curled, one stretched out so its tip touches (x, y), carrying a dab of gold
+    paint (paint 0..1). press 0..1 flattens the toe tip on the paper. One hard
+    shadow tone and a rim like the body. About 700 px long at s = 1."""
+    env = _Env(tod, 3.6 * s, drawing, None)
+    env.pad = int(44 * s) + 8
     dark = env.c("dark")
-    pad = env.lit(P["pad"])
+    padc = env.lit(P["pad"])
+    lt = palette.mix(dark, padc, 0.55)
     d = np.array([-0.80, -0.60])
     nv = np.array([0.60, -0.80])
+    ang = math.atan2(d[1], d[0])
     P0 = np.array([x, y], np.float64)
 
     def Lp(a, b):
         return P0 - d * a * s + nv * b * s
 
-    p = _Part(cel, _bounds(np.array([Lp(-30, -170), Lp(-30, 170), Lp(700, -170), Lp(700, 170)]), 10), env)
+    p = _Part(cel, _bounds(np.array([Lp(-40, -190), Lp(-40, 190), Lp(740, -190), Lp(740, 190)]), 10), env)
     if not p.ok:
         return
     w = env.inkw
-    arm, c, Lf, Rt, t, wv = _tube([Lp(660, 34), Lp(450, 16), Lp(270, 4), Lp(170, 0)], np.array([76, 68, 58, 64]) * s, n=40)
+    cen = Lp(150, 0)
+    # the forearm: heavy toward the elbow, narrowing to the wrist, never two parallel lines
+    arm, c, Lf, Rt, t, wv = _tube([Lp(720, 50), Lp(530, 30), Lp(370, 10), Lp(236, 2)], np.array([90, 84, 70, 60]) * s, n=44)
     p.fill(arm, dark)
-    th = np.linspace(0, 2 * np.pi, 48, endpoint=False)
-    palm = np.array([Lp(142 + 92 * math.cos(q), 76 * math.sin(q) * (1 + 0.1 * math.cos(q))) for q in th])
+    # the mitten, seen from above
+    palm = core.catmull([Lp(236, 62), Lp(180, 86), Lp(112, 82), Lp(70, 46), Lp(66, -44), Lp(108, -82), Lp(178, -86),
+                         Lp(236, -62)], 8, closed=True)
     p.fill(palm, dark)
+    # the wrist ruff: clumps of fur that lie over the back of the paw and break both edges
+    ruff = []
+    for b0, ln_, wd_ in ((78, 44, 22), (42, 62, 24), (4, 52, 26), (-34, 64, 24), (-72, 42, 22)):
+        ruff.append(core.catmull([Lp(266, b0 + wd_), Lp(234, b0 + wd_ * 0.9), Lp(252 - ln_, b0 + 3),
+                                  Lp(234, b0 - wd_ * 0.9), Lp(266, b0 - wd_)], 6, closed=False))
+        p.fill(ruff[-1], dark)
+    # four toes: three curled under, one stretched out to the paper
+    k = 1 + 0.4 * press
     toes = []
-    for a_, b_, r_ in ((66, 60, 31), (86, -64, 29), (50, -34, 30)):
-        tp = core.ellipse(*Lp(a_, b_), r_ * s, r_ * s * 0.92, 24)
+    for a_, b_, ra, rb in ((76, 64, 34, 28), (56, -22, 36, 29), (78, -62, 32, 27)):
+        tp = core.ellipse(*Lp(a_, b_), ra * s, rb * s, 26, rot=ang)
         p.fill(tp, dark)
-        toes.append((tp, Lp(a_, b_), r_))
-    k = 1 + 0.35 * press
-    toe, tc, tL, tR, tt, tw = _tube([Lp(104, 16), Lp(58, 9), Lp(17 + 3 * press, 2)], np.array([31, 27, 17.5 * k]) * s, n=24)
+        toes.append((tp, a_, b_))
+    toe, tc, tL, tR, tt, tw = _tube([Lp(120, 26), Lp(64, 14), Lp(19 + 3 * press, 3)], np.array([33, 29, 19 * k]) * s, n=24)
     p.fill(toe, dark)
-    # pads: under the toe tip, along the lower edge of the palm, on the curled toes
-    p.fill(core.ellipse(*Lp(20, -9), 15 * s * k, 8 * s, 18, rot=math.atan2(d[1], d[0])), pad, form=False, clip=p.mask(toe))
-    p.fill(core.ellipse(*Lp(132, -60), 50 * s, 17 * s, 22, rot=math.atan2(d[1], d[0])), pad, form=False, clip=p.mask(palm))
-    for tp, cc, r_ in toes[1:]:
-        p.fill(core.ellipse(cc[0] - nv[0] * r_ * 0.62 * s, cc[1] - nv[1] * r_ * 0.62 * s, r_ * 0.6 * s, r_ * 0.3 * s, 16,
-                            rot=math.atan2(d[1], d[0])), pad, form=False, clip=p.mask(tp))
+    p.fill(core.ellipse(*Lp(15, -6), 13 * s * k, 6.5 * s, 16, rot=ang), padc, form=False, clip=p.mask(toe))
     # the dab of gold paint
     if paint > 0.02:
         r = core.rng("paintdab")
-        ang = np.linspace(0, 2 * np.pi, 14, endpoint=False)
-        rad = (11 + 6 * paint) * s * (0.8 + 0.4 * r.random(14))
-        c0 = Lp(7, -4)
-        blob = core.catmull(np.c_[c0[0] + np.cos(ang) * rad, c0[1] + np.sin(ang) * rad * 0.8], 5)
-        gold = env.lit(palette.ROCKET["star"])
-        p.fill(blob, gold, form=False)
-        p.later(core.ellipse(c0[0] - 3 * s, c0[1] - 3 * s, 3.2 * s, 2.0 * s, 10), (1.0, 0.97, 0.8))
+        an_ = np.linspace(0, 2 * np.pi, 14, endpoint=False)
+        rad = (11 + 7 * paint) * s * (0.8 + 0.4 * r.random(14))
+        c0 = Lp(6, -3)
+        blob = core.catmull(np.c_[c0[0] + np.cos(an_) * rad, c0[1] + np.sin(an_) * rad * 0.8], 5)
+        p.fill(blob, env.lit(palette.ROCKET["star"]), form=False)
+        p.later(core.ellipse(c0[0] - 3 * s, c0[1] - 3 * s, 3.4 * s, 2.1 * s, 10), (1.0, 0.97, 0.8))
         p.ink(blob, w * 0.6, col=env.lit((0.70, 0.48, 0.14)), closed=True, lightdir=False)
-    cen = Lp(150, 0)
-    p.ink(Lf, w * 1.8, taper=(0.02, 0.12), lightdir=cen)
-    p.ink(Rt, w * 1.8, taper=(0.02, 0.12), lightdir=cen)
-    p.ink(palm[np.r_[30:48, 0:8]], w * 1.8, taper=(0.1, 0.1), lightdir=cen)
-    for tp, cc, r_ in toes:
-        p.ink(tp[np.r_[14:24, 0:6]], w * 1.5, taper=(0.15, 0.15), lightdir=cen)
-    p.ink(np.vstack([tL, toe[24:33], tR[::-1]]), w * 1.8, taper=(0.1, 0.1), lightdir=cen)
-    lt = palette.mix(dark, pad, 0.6)
-    for a_, b_ in ((420, 30), (350, -20), (300, 36), (230, -30), (200, 30)):
-        p.ink(np.array([Lp(a_, b_), Lp(a_ - 34, b_ + 4)]), w * 0.7, col=lt, taper=(0.1, 0.6), lightdir=False)
-    p.finish(20.0 * s, env.rimw * 1.5)
+    # ink: one heavy outer contour, thin lighter lines inside for the fur and the toes
+    p.ink(Lf[:39], w * 1.9, taper=(0.02, 0.10), lightdir=cen)
+    p.ink(Rt[:39], w * 1.9, taper=(0.02, 0.10), lightdir=cen)
+    p.ink(palm[2:57], w * 1.9, taper=(0.08, 0.08), lightdir=cen)
+    for tp, a_, b_ in toes:
+        p.ink(tp[np.r_[18:26, 0:9]], w * 1.7, taper=(0.12, 0.12), lightdir=cen)
+        p.ink(np.array([Lp(a_ - 6, b_ + 3), Lp(a_ + 26, b_ + 5)]), w * 0.7, col=lt, taper=(0.1, 0.6), lightdir=False)
+    p.ink(np.vstack([tL, toe[24:33], tR[::-1]]), w * 1.9, taper=(0.08, 0.08), lightdir=cen)
+    for rf in ruff:
+        p.ink(rf[4:-4], w * 0.9, col=lt, taper=(0.2, 0.2), lightdir=False)
+    for a_, b_ in ((560, 40), (470, -24), (400, 44), (330, -30), (300, 30)):
+        p.ink(np.array([Lp(a_, b_), Lp(a_ - 40, b_ + 5)]), w * 0.7, col=lt, taper=(0.1, 0.6), lightdir=False)
+    p.finish(26.0 * s, env.rimw * 1.6)

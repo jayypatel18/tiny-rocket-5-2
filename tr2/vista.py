@@ -477,7 +477,7 @@ def render(cam, f, t, star=None):
             shim = 0.10 + 0.08 * math.sin(t * 5.0) * math.sin(t * 1.7 + 1.0)
             core.add_light(pic, glw, (1.0, 0.93, 0.72), shim)
             if star is not None:
-                near = np.exp(-((xs - star[0]) / 420.0) ** 2)
+                near = np.exp(-((xs - star[0]) / 230.0) ** 2)
                 core.add_light(pic, (glw * near).astype(np.float32), (1.0, 0.95, 0.75), min(1.0, 0.9 * star[2]))
                 core.add_light(pic, core.gblur((glw * near).astype(np.float32), 5.0), (1.0, 0.85, 0.55), min(1.0, 0.7 * star[2]))
     if star is not None:
@@ -485,7 +485,7 @@ def render(cam, f, t, star=None):
         d2 = ((xs - sx_) / 400.0) ** 2 + ((ys - (hz + 105.0)) / 120.0) ** 2
         pool = np.exp(-d2) * below * pw
         lumc = pic.mean(-1)
-        core.add_light(pic, (pool * (0.35 + 0.65 * lumc)).astype(np.float32), (1.0, 0.84, 0.56), 0.62)
+        core.add_light(pic, (pool * (0.35 + 0.65 * lumc)).astype(np.float32), (1.0, 0.84, 0.56), 0.80)
 
     # the air on top: haze on the horizon, the thin line of atmosphere, sun bloom over the sea
     sx = SUN_X * s0 + tx0

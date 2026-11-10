@@ -56,7 +56,7 @@ def render(fl, n, f):
     z = 1.0 + 0.04 * core.ease_io(core.span(t, 0.0, T_STILL), 1.6)
     dk = 1 - core.smooth(core.span(t, T_STILL - 0.5, T_STILL))
     dx, dy = common.drift(t, 2.5 * dk, 3)
-    pl = dict(color=(1.0, 0.60, 0.26), dir=(-0.5, 0.85), amount=lt) if lt > 0.01 else None
-    pic, an = ps.window_shot(pose, TOD, k, r=470.0 * z, s=7.0 * z, cx=960 + dx, cy=545 + dy, light=lt, plight=pl,
+    pl = dict(color=(1.0, 0.60, 0.26), dir=(-0.5, 0.85), amount=lt) if lt > 0.01 else ps.DIAL
+    pic, an = ps.window_shot(pose, TOD, k, r=470.0 * z, s=7.0 * z, cx=960 + dx, cy=545 + dy, light=lt, plight=pl, ptod=ps.cockpit_tod(TOD),
                              reflect=0.35 + 0.02 * min(t, T_STILL), fog=0.0, ss=2)
     return pic, dict(bloom_amt=0.35 + 0.4 * lt, bloom_thr=0.78)

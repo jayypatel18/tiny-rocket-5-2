@@ -17,11 +17,13 @@ W, H = core.W, core.H
 
 
 def climb_at(t, T, tb):
-    """The journey 0..1: it reaches the top of the last deck exactly at the break."""
+    """The journey 0..1. The climb accelerates, reaches the top of the last deck
+    exactly at the break, then eases into calm open sky."""
     D = cloudset.DECK
     if t <= tb:
-        return D * (0.06 + 0.94 * t / tb) if tb > 0 else D
-    return D + (1.0 - D) * core.ease_out(core.span(t, tb, T + 0.2), 1.5) * 1.0
+        u = max(t, 0.0) / tb
+        return D * (0.05 + 0.95 * (0.30 * u + 0.70 * u * u))
+    return D + (1.0 - D) * core.ease_out(core.span(t, tb, T + 0.25), 1.8)
 
 
 def _flame(cel, x, y, rot, s, drawing, power=1.0):
@@ -117,33 +119,37 @@ def render(fl, n, f):
     since = t - tb
     burst = math.exp(-since / 0.35) if since >= 0 else 0.0
     # camera: rides with the rocket, shaken hard, a kick at the break
-    amp = 4.0 + 5.0 * core.smooth(core.span(t, 0.0, tb)) + 9.0 * burst
+    rate = (climb_at(t + 0.02, T, tb) - climb_at(t - 0.02, T, tb)) / 0.04
+    calm = 1.0 if since < 0 else max(0.18, math.exp(-since / 0.22))
+    amp = (4.0 + 7.0 * core.smooth(core.span(t, 0.0, tb))) * calm + 9.0 * burst
     sh = common.shake(f, amp, 7)
     cam = core.Camera(shake=sh, zoom=1.02 + 0.03 * core.smooth(t / T) - 0.02 * burst)
 
-    pic = cloudset.render(cam, f, t, climb)
+    pic = cloudset.render(cam, f, t, climb, rate=rate)
 
     # the rocket: sways, rattles; it surges up the frame as it breaks out
     tod = palette.blend_tod("predawn", "sunrise", core.clamp(0.25 + 0.75 * light))
-    sway_x = 46.0 * core.noise1(t * 0.9, 71) + 18.0 * core.noise1(t * 2.3, 72)
-    surge = 70.0 * core.overshoot(core.span(since, -0.12, 0.45), 2.2) if since > -0.12 else 0.0
+    sway_x = 74.0 * core.noise1(t * 0.8, 71) + 26.0 * core.noise1(t * 2.3, 72)
+    surge = 90.0 * core.overshoot(core.span(since, -0.12, 0.45), 2.2) if since > -0.12 else 0.0
     rx = W / 2 + sway_x
-    ry = 668.0 - 30.0 * core.smooth(t / T) + 14.0 * core.noise1(t * 1.3, 73) - surge
-    rot = 0.06 * core.noise1(t * 1.1, 74) + 0.02 * sway_x / 46.0
-    rr = core.rng("rattle7", fl)
+    ry = 742.0 - 30.0 * core.smooth(t / T) + 30.0 * core.noise1(t * 1.2, 73) - surge
+    rot = 0.075 + 0.05 * core.noise1(t * 1.0, 74) + 0.03 * core.noise1(t * 2.6, 75)      # leaning a few degrees
+    rr = core.rng("rattle7", fl)                                                         # hard shake, on ones
     from .. import rocket
+    kshake = 0.35 + 0.65 * calm
     st = rocket.State(fin_rattle=1.0, flame=1.0, light=1.0,
-                      shake=(float(rr.normal(0, 2.6)), float(rr.normal(0, 2.0)), float(rr.normal(0, 0.012))))
-    s = 0.86
+                      shake=(float(rr.normal(0, 5.0)) * kshake, float(rr.normal(0, 4.0)) * kshake,
+                             float(rr.normal(0, 0.022)) * kshake))
+    s = 0.96                                         # about 480 px feet to tip
     sx, tx, ty = cam.xf(1.0)
     px, py = rx * sx + tx, ry * sx + ty
-    cx0, cy0 = int(px - 330), int(py - 700)
-    cel = core.Cel(w=660, h=860, ss=2, x0=cx0, y0=cy0)
+    cx0, cy0 = int(px - 360), int(py - 760)
+    cel = core.Cel(w=720, h=920, ss=2, x0=cx0, y0=cy0)
     try:
         info = rocket.draw(cel, px, py, s=s * sx, tod=tod, drawing=fl, rot=rot, view="side", state=st)
     except Exception as e:  # noqa
         print("s7a rocket with blended light:", repr(e)[:160])
-        cel = core.Cel(w=660, h=860, ss=2, x0=cx0, y0=cy0)
+        cel = core.Cel(w=720, h=920, ss=2, x0=cx0, y0=cy0)
         info = rocket.draw(cel, px, py, s=s * sx, tod="sunrise", drawing=fl, rot=rot, view="side", state=st)
     nx, ny = info["nozzle"]
     # smoke and flame go behind the rocket
@@ -167,10 +173,10 @@ def render(fl, n, f):
             kind = ("cumulus", "wisp", "cumulus")[k % 3]
             x = px + math.cos(ang) * v * (1 - math.exp(-tau * 3.0)) / 3.0 * 1.4
             y = py - 120.0 + math.sin(ang) * v * (1 - math.exp(-tau * 3.0)) / 3.0 + 1500.0 * tau * tau + 250.0 * tau
-            sc = r.uniform(0.16, 0.42) * (1 + 1.6 * tau)
-            sp.place(lay, kind, int(r.integers(0, 6)), x, y, sc, cols, op=max(0.0, 1 - tau / 0.75) ** 1.2 * 0.9,
+            sc = r.uniform(0.24, 0.6) * (1 + 1.8 * tau)
+            sp.place(lay, kind, int(r.integers(0, 6)), x, y, sc, cols, op=max(0.0, 1 - tau / 0.8) ** 1.1,
                      flip=bool(k % 2))
-        core.over(pic, core.gblur(lay, 1.5 + 5.0 * tau))
+        core.over(pic, core.gblur(lay, 1.0 + 3.0 * tau))
 
     try:
         rocket.draw_glass(cel, info, tod if isinstance(tod, str) else "sunrise", fl)
@@ -179,7 +185,7 @@ def render(fl, n, f):
     core.over(pic, cel.rgba(), cx0, cy0)
 
     # near cloud and wisps whip past the lens
-    core.over(pic, cloudset.render_front(cam, f, t, climb))
+    core.over(pic, cloudset.render_front(cam, f, t, climb, rate=rate))
 
     # out in the open: the sun flares from the right, god rays fan out
     sa = cloudset.sun_amount(climb)

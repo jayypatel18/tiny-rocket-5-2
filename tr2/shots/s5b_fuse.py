@@ -74,14 +74,14 @@ def _mid_blades(pic, cam, tt, spark, flick, front):
     from .. import paint
     T = palette.TOD[TOD]
     s, tx, ty = cam.xf(1.0)
-    step = 4.5 if front else 3.0
+    step = 7.5 if front else 3.0
     salt = 7.0 if front else 3.0
     idx = np.arange(int((-80 - tx) / s // step), int((core.W + 80 - tx) / s // step) + 1)
     h1, h2, h3, h4 = (hp.hashf(idx, salt + q) for q in range(4))
     X = idx * step + (h1 - 0.5) * step
     gy = common.ground_y(X)
-    Y = gy + (11.0 + 8.0 * h2 if front else -1.0 + 4.0 * h2)
-    length = (26.0 + 50.0 * h3 ** 1.5) if front else (38.0 + 72.0 * h3 ** 1.4)
+    Y = gy + (15.0 + 9.0 * h2 if front else -1.0 + 4.0 * h2)
+    length = (20.0 + 34.0 * h3 ** 1.5) if front else (38.0 + 72.0 * h3 ** 1.4)
     wave = tt * 1.6 + X / 90.0 + h1 * 6.283
     ang = -np.pi / 2 + (h4 - 0.5) * 0.8 + 0.07 * np.sin(wave)
     bend = (h2 - 0.5) * 1.3 + 0.12 * np.sin(wave - 0.9)
@@ -153,17 +153,17 @@ def _fuse(pic, cam, k, fl, hx):
     if hx < xb:                                     # unburnt
         X = np.linspace(max(hx, xa), xb, 50)
         q = sc(X)
-        cel.stroke(q, 4.3 * s, ink, taper=(0.0, 0.0))
-        cel.stroke(q, 3.0 * s, string_s, taper=(0.0, 0.0))
-        cel.stroke(q - (0, 0.55 * s), 1.5 * s, string_l, taper=(0.0, 0.0))
+        cel.stroke(q, 5.6 * s, ink, taper=(0.0, 0.0))
+        cel.stroke(q, 4.2 * s, string_s, taper=(0.0, 0.0))
+        cel.stroke(q - (0, 0.8 * s), 2.3 * s, string_l, taper=(0.0, 0.0))
         for xt in np.arange(math.ceil(max(hx, xa) / 5.0) * 5.0 + 3.0, xb, 5.0):     # the twist of the string
             c = sc([xt])[0]
-            cel.stroke(np.array([c + (-1.3 * s, 1.5 * s), c + (1.3 * s, -1.5 * s)]), 0.9 * max(s, 1), ink, taper=(0.1, 0.1))
+            cel.stroke(np.array([c + (-1.6 * s, 2.0 * s), c + (1.6 * s, -2.0 * s)]), 0.9 * max(s, 1), ink, taper=(0.1, 0.1))
     if hx > xa:                                     # burnt: thin, black, crumbling
         X = np.linspace(xa, min(hx, xb), 50)
         q = sc(X)
         pr = 0.55 + 0.45 * core.fbm_at(X, X * 0 + 0.3, 9.0, 2, 5)
-        cel.stroke(q + (0, 0.5 * s), 3.0 * s, np.float32((0.085, 0.08, 0.10)), taper=(0.0, 0.0), pressure=pr)
+        cel.stroke(q + (0, 0.5 * s), 3.8 * s, np.float32((0.085, 0.08, 0.10)), taper=(0.0, 0.0), pressure=pr)
         r = core.rng("ash", 1)
         for xt in np.arange(math.ceil(xa / 7.0) * 7.0, min(hx, xb), 7.0):
             if r.random() < 0.45:
@@ -240,7 +240,7 @@ def render(fl, n, f):
     sig = 7.5 * (1 - rack) + 0.5
     if sig > 0.6:                                   # the rocket and the grass behind are out of focus until the rack
         pic[:] = core.gblur(pic, sig)
-    fx.ground_light(pic, hx_s, hy_s + 6 * s, 46 * s * flick, WARM, 0.55 * flick, squash=0.5)
+    fx.ground_light(pic, hx_s, hy_s + 5 * s, 38 * s * flick, (1.0, 0.55, 0.20), 0.34 * flick, squash=0.42)
     _mid_blades(pic, cam, tt, (hx, hy), flick, front=False)
     _fuse(pic, cam, k, fl, hx)
     _smoke(pic, cam, hx, hy, tt, k)
@@ -253,10 +253,10 @@ def render(fl, n, f):
         kx = _spark_x(k - back)
         age = (fl - int(_starts[k - back])) / FPS + 0.02
         core.over(pic, fx.sparks_layer(age, (kx, float(fuse_y(kx)) - 3.0), seed=100 + k - back, n=20, ground_y=gy, spread=(14.0, 166.0),
-                                       speed=(70.0, 340.0), burst=0.05, shutter=1.0 / 24.0, size=0.42, frame=fl, xf=(s, tx, ty),
+                                       speed=(70.0, 340.0), burst=0.05, shutter=1.0 / 24.0, size=0.62, frame=fl, xf=(s, tx, ty),
                                        gravity=560.0, drag=2.4, dur=0.10))
     xa, xb = (-60 - tx) / s, (core.W + 60 - tx) / s
-    core.over(pic, hs.grass_band(cam, TOD, f, xa, xb))
+    core.over(pic, hs.grass_band(cam, TOD, f, xa, xb), opacity=0.6)
     _mid_blades(pic, cam, tt, (hx, hy), flick, front=True)
     fx.glow_at(pic, hx_s, hy_s, 9 * s, (1.0, 0.95, 0.80), 0.8 * flick)
     _fore(pic, cam, tt, 1.7, 5.0, hx_s, flick, 31)

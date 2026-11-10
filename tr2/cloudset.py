@@ -299,12 +299,15 @@ def render(cam, f, t, climb, rate=RATE):
         core.add_light(pic, np.exp(-(d / 30.0) ** 4).astype(np.float32), (1.0, 0.99, 0.92), sa * opened)
     speed = rate * TRAVEL / core.FPS                                  # px a frame at parallax 1
     far = np.zeros((H, W, 4), np.float32)
-    for li in (0, 1, 2):                                              # far depths: crisp
+    for li in (0, 1):                                                 # far depths: slow and crisp
         _layer(li, cam, A, light, dst=far)
     core.over(pic, far)
-    near = _layer(3, cam, A, light, 0.3 * speed * LAYERS[3]["p"])      # behind the rocket, streaking a little
+    mid = _layer(2, cam, A, light, 0.45 * speed * LAYERS[2]["p"])     # nearer: smeared along y by its speed
+    core.over(pic, mid)
+    near = _layer(3, cam, A, light, 0.65 * speed * LAYERS[3]["p"])
     core.over(pic, near)
-    _LAST_ALPHA = far[..., 3] * (1 - near[..., 3]) + near[..., 3]
+    al = far[..., 3] * (1 - mid[..., 3]) + mid[..., 3]
+    _LAST_ALPHA = al * (1 - near[..., 3]) + near[..., 3]
     return np.clip(pic, 0, 1).astype(np.float32)
 
 
@@ -316,7 +319,7 @@ def render_front(cam, f, t, climb, rate=RATE):
     for li, L in enumerate(LAYERS):
         if not L["front"]:
             continue
-        lay = _layer(li, cam, A, light, min(0.5 * speed * L["p"], 90.0), res=2)
+        lay = _layer(li, cam, A, light, min(0.75 * speed * L["p"], 150.0), res=2)
         lay = core.gblur(lay, 1.0 + 1.0 * (L["p"] - 1.5))
         core.over_rgba(half, lay)
     out = core.warp(half, 2.0, 0.5, 0.5)

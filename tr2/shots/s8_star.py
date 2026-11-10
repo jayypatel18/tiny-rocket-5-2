@@ -27,7 +27,7 @@ XMAX = 1.32
 def camera(t, T):
     u = core.ease_io(core.span(t, -0.4, T + 0.8), 1.5)
     dx, dy = common.drift(t, 1.6, 8)
-    return core.Camera(cx=W / 2 + 64.0 * u + dx, cy=H / 2 - 8.0 * u + dy, dolly=core.lerp(1.0, 1.12, u), pan=26.0 * u)
+    return core.Camera(cx=W / 2 + 120.0 * u + dx, cy=H / 2 - 8.0 * u + dy, dolly=core.lerp(1.0, 1.12, u), pan=34.0 * core.smooth(core.span(t, 1.0, T + 0.8)))
 
 
 def _bez2(p, q):
@@ -107,23 +107,28 @@ def _star(pic, cam, t, fl, t_ign, t_end):
     P[:, 0] += wob * 1.5 * np.minimum(age, 3.0)
     S = _screen(cam, P)
     seg = np.r_[np.hypot(*np.diff(S, axis=0).T), 1.0]
-    k = 0.35 + 0.65 * np.exp(-age / 3.2)
-    hot = np.exp(-age / 0.28)
-    warm = np.exp(-age / 1.3)
-    amp = seg * (0.16 * k + 0.42 * warm + 0.9 * hot) * np.clip(q * 30.0, 0, 1)
-    rad = 1.25 + 5.2 * np.exp(-age / 0.45) + 2.4 * np.exp(-age / 2.4)
-    col = np.empty((n, 3))
-    a1 = np.clip(age / 0.8, 0, 1)[:, None]
-    a2 = np.clip((age - 0.8) / 2.6, 0, 1)[:, None]
-    a3 = np.clip((age - 3.4) / 3.0, 0, 1)[:, None]
-    c = np.array([1.0, 0.98, 0.90]) * (1 - a1) + np.array([1.0, 0.84, 0.52]) * a1
-    c = c * (1 - a2) + np.array([1.0, 0.62, 0.58]) * a2
-    c = c * (1 - a3) + np.array([0.62, 0.56, 0.98]) * a3
-    col[:] = c
+    back = u - q                                    # how far behind the head, in fractions of the arc
+    taper = np.clip(1 - back / 0.6, 0, 1) ** 1.4    # the bright body tapers over 60 percent of the arc
+    k = 0.30 + 0.70 * np.exp(-age / 3.5)
+    hot = np.exp(-age / 0.30)
+    fadein = np.clip(q * 30.0, 0, 1)
+    # the edge: gold near the head, rose further back, violet at the old end
+    rad = 1.2 + 8.5 * taper + 3.0 * hot
+    a2 = np.clip(back / 0.35, 0, 1)[:, None]
+    a3 = np.clip((back - 0.45) / 0.4, 0, 1)[:, None]
+    c = np.array([1.0, 0.82, 0.46]) * (1 - a2) + np.array([1.0, 0.58, 0.60]) * a2
+    c = c * (1 - a3) + np.array([0.66, 0.58, 1.0]) * a3
+    col = np.ascontiguousarray(c)
+    amp = seg / (2.5 * rad) * (0.30 * k + 0.55 * taper + 0.5 * hot) * fadein
     skymod._splat(glow, S[:, 0], S[:, 1], rad, col, amp)
+    # the white core
+    rad2 = 0.6 + 3.2 * taper + 1.5 * hot
+    amp2 = seg / (2.5 * rad2) * (0.15 * k + 1.3 * taper ** 1.2 + 1.0 * hot) * fadein
+    skymod._splat(glow, S[:, 0], S[:, 1], rad2, np.tile(np.array([[1.0, 0.99, 0.93]]), (n, 1)), amp2)
     wide = np.zeros_like(pic)
-    skymod._splat(wide, S[::6, 0], S[::6, 1], 7.0 + 0 * rad[::6], col[::6], seg[::6] * 6 * 0.030 * (k[::6] + 1.5 * warm[::6] + 2.5 * hot[::6]))
-    glow += core.gblur(wide, 4.0)
+    skymod._splat(wide, S[::6, 0], S[::6, 1], 16.0 + 0 * rad[::6], col[::6],
+                  seg[::6] * 6 / 40.0 * (0.10 * k[::6] + 0.30 * taper[::6]) * fadein[::6])
+    glow += core.gblur(wide, 5.0)
 
     # glitter shed along the way: it falls, twinkles and dies
     r = core.rng("glitter", 8)
@@ -168,12 +173,14 @@ def _star(pic, cam, t, fl, t_ign, t_end):
     fk = 1.0 + 0.07 * math.sin(fl * 1.9) * math.sin(fl * 0.7 + 1.0)
     pw = surge * fk
     X1, Y1 = np.array([float(hx)]), np.array([float(hy)])
-    for rad_, a_, c_ in ((6.5, 3.0, (1.0, 1.0, 0.97)), (17.0, 1.1, (1.0, 0.96, 0.82)), (50.0, 0.50, (1.0, 0.84, 0.52)),
-                         (140.0, 0.20, (1.0, 0.72, 0.42)), (340.0, 0.075, (0.9, 0.7, 0.9))):
+    for rad_, a_, c_ in ((9.5, 4.5, (1.0, 1.0, 0.98)), (24.0, 1.2, (1.0, 0.96, 0.82)), (66.0, 0.55, (1.0, 0.84, 0.52)),
+                         (190.0, 0.24, (1.0, 0.72, 0.42)), (430.0, 0.085, (0.9, 0.7, 0.9))):
         skymod._splat(glow, X1, Y1, np.array([rad_ * (0.9 + 0.1 * pw)]), np.array([c_]), np.array([a_ * pw]))
-    rot = 0.18 + 0.05 * math.sin(t * 0.9)
-    skymod._glint(glow, float(hx), float(hy), 140.0 * pw ** 0.5, 2.6 * pw, 1.0, 0.97, 0.86, rot)
-    skymod._glint(glow, float(hx), float(hy), 66.0 * pw ** 0.5, 1.8 * pw, 1.0, 0.9, 0.7, rot + math.pi / 4)
+    # four fine diffraction spikes that breathe
+    breathe = 1.0 + 0.16 * math.sin(t * 2.3) + 0.06 * math.sin(t * 5.1 + 1.0)
+    rot = 0.16 + 0.04 * math.sin(t * 0.9)
+    for o in (-0.45, 0.45):
+        skymod._glint(glow, float(hx) + o, float(hy) + o, 185.0 * breathe * pw ** 0.5, 2.6 * pw, 1.0, 0.98, 0.88, rot)
     _streak(glow, hx, hy, 230.0 * pw ** 0.5, 3.4, 0.6 * pw, (1.0, 0.92, 0.78))
     _streak(glow, hx, hy, 420.0, 1.3, 0.16 * pw, (0.75, 0.85, 1.0))
     # a soft lens flare: ghosts on the line through the middle of the frame
@@ -183,10 +190,15 @@ def _star(pic, cam, t, fl, t_ign, t_end):
         gx_, gy_ = cx + (cx - hx) * kq, cy + (cy - hy) * kq
         skymod._splat(glow, np.array([gx_]), np.array([gy_]), np.array([rr]), np.array([cc]), np.array([aa * pw]))
     pic[:] = 1 - (1 - np.clip(pic, 0, 1)) * (1 - np.clip(glow, 0, 1))
-    if flash > 0.02:   # the ignition: one white frame, then it rings down
+    kf = fl - int(round(t_ign * FPS))
+    if kf == 0:        # the ignition: one white frame
+        core.add_light(pic, np.ones((H, W), np.float32), (1.0, 0.99, 0.95), 0.94)
+    elif kf in (1, 2):  # then two frames of heavy bloom ringing down
         d = np.hypot(np.arange(W, dtype=np.float32)[None, :] - hx, np.arange(H, dtype=np.float32)[:, None] - hy)
-        fl_ = (0.40 + 0.6 * np.exp(-d / 520.0)) * flash
-        core.add_light(pic, fl_.astype(np.float32), (1.0, 0.97, 0.88), 1.0)
+        core.add_light(pic, (0.30 + 0.7 * np.exp(-d / 620.0)).astype(np.float32), (1.0, 0.97, 0.88), 0.62 if kf == 1 else 0.36)
+    elif flash > 0.02:
+        d = np.hypot(np.arange(W, dtype=np.float32)[None, :] - hx, np.arange(H, dtype=np.float32)[:, None] - hy)
+        core.add_light(pic, np.exp(-d / 520.0).astype(np.float32), (1.0, 0.97, 0.88), 0.5 * flash)
     return float(hx), float(hy), 0.55 * pw / 2.6 + 0.45
 
 
@@ -206,4 +218,6 @@ def render(fl, n, f):
         star = None
     pic = vista.render(cam, f, t, star=star)
     _star(pic, cam, t, fl, t_ign, t_end)
-    return pic, dict(bloom_amt=0.42, bloom_thr=0.86, vig=0.26)
+    kf = fl - int(round(t_ign * FPS))
+    heavy = kf in (1, 2)
+    return pic, dict(bloom_amt=0.95 if heavy else 0.42, bloom_thr=0.60 if heavy else 0.86, vig=0.26)

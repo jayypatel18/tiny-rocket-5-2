@@ -53,6 +53,7 @@ def render(fl, n, f):
     z = 1.0 + 0.05 * core.ease_io(core.span(t, 0.0, n / FPS), 1.5)
     dx, dy = common.drift(t, 2.5, 4)
     fog = 0.22 * core.smooth(core.span(t, 2.62, 2.9)) * (1 - core.smooth(core.span(t, 3.0, 3.5)))
-    pic, an = ps.window_shot(pose, TOD, k, r=385.0 * z, s=5.8 * z, cx=960 + dx, cy=552 + dy, reflect=0.1 + 0.22 * t,
+    pic, an = ps.window_shot(pose, TOD, k, r=405.0 * z, s=6.4 * z, cx=960 + dx, cy=552 + dy, reflect=0.1 + 0.22 * t,
+                             ptod=ps.cockpit_tod(TOD), plight=ps.DIAL,
                              fog=fog, sig_face=6.0 * (1 - u), sig_front=1.5 * u, ss=2)
     return pic, dict(bloom_amt=0.4, bloom_thr=0.76)

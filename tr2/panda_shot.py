@@ -151,8 +151,9 @@ def draw_string(cel, pts, s, tod, curve=True):
     p = np.asarray(pts, np.float64)
     if curve and len(p) > 2:
         p = core.catmull(p, 10, closed=False)
-    cel.stroke(p, 0.26 * s * 3.2, T["ink"], taper=(0.0, 0.03))
-    cel.stroke(p, 0.26 * s * 2.0, palette.lit(palette.ROCKET["string"], T), taper=(0.0, 0.03))
+    pale = palette.mix(palette.lit(palette.ROCKET["string"], T), (1.0, 0.97, 0.86), 0.5)      # it catches the light
+    cel.stroke(p, 0.26 * s * 4.6, T["ink"], taper=(0.0, 0.03))
+    cel.stroke(p, 0.26 * s * 3.1, pale, taper=(0.0, 0.03))
 
 
 def pendulum(knot, v0, tau, damp=3.0, freq=6.5, lag=0.045, stiff=0.5):
@@ -183,7 +184,7 @@ def soft_bg(name, tod, cx=1690, cy=1012, zoom=4.5, sigma=16.0):
 
 
 def window_shot(pose, tod, drawing, r=380.0, s=4.8, cx=960.0, cy=560.0, head_at=None, light=0.0, plight=None,
-                reflect=0.0, fog=0.0, sig_face=0.0, sig_front=0.0, shake=(0.0, 0.0), ss=2):
+                reflect=0.0, fog=0.0, sig_face=0.0, sig_front=0.0, shake=(0.0, 0.0), ss=2, ptod=None):
     """Outside the teacup looking in through the round window: the inside wall,
     the panda (clipped to the opening), then the porcelain, brass rim and glass.
     The head centre sits at head_at (default: the window centre). Returns (pic, anchors)."""
@@ -196,7 +197,7 @@ def window_shot(pose, tod, drawing, r=380.0, s=4.8, cx=960.0, cy=560.0, head_at=
     inner = cel.rgba()
     hx, hy = (cx, cy + 0.04 * r) if head_at is None else head_at
     cel = core.Cel(ss=ss)
-    an = panda.draw(cel, pose, hx + shake[0], hy + 126.0 * s + shake[1], s, tod, drawing=drawing, light=plight)
+    an = panda.draw(cel, pose, hx + shake[0], hy + 126.0 * s + shake[1], s, tod if ptod is None else ptod, drawing=drawing, light=plight)
     core.over_rgba(inner, cel.rgba())
     inner *= rocket.cockpit_mask(cx, cy, r)[..., None]
     if sig_face > 0.35:
@@ -209,6 +210,19 @@ def window_shot(pose, tod, drawing, r=380.0, s=4.8, cx=960.0, cy=560.0, head_at=
         front = core.gblur(front, sig_front)
     core.over(pic, front)
     return pic, an
+
+
+def cockpit_tod(tod="predawn"):
+    """Light for the panda behind the glass: the cut's own time of day, but a brighter and
+    warmer key so the russet and the white still read through the tint, and a cool rim."""
+    T = dict(palette.TOD[tod])
+    T["key"] = np.array([0.98, 0.92, 0.95], np.float32)
+    T["amb"] = np.array([0.52, 0.52, 0.72], np.float32)
+    T["rim"] = np.array([0.72, 0.88, 1.0], np.float32)
+    return T
+
+
+DIAL = dict(color=(1.0, 0.70, 0.38), dir=(0.75, 0.55), amount=0.42)      # the warm glow of the cockpit dial
 
 
 def jitter(pose, key, amp):

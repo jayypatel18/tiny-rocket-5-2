@@ -24,15 +24,15 @@ MOUTH_REL = np.array([20.9, 109.1])   # where the mouth corner is when it lets g
 
 P = panda.Pose
 # Key poses, drawn facing RIGHT (knot at +x); the whole pose is mirrored for the screen.
-STRAIN = P(yaw=0.38, head_yaw=0.36, pitch=0.0, tilt=-6, lean=-6, head_dx=5, paw_l=(27, 69), paw_r=(46, 72),
-           mouth_open=0.2, smile=0.0, mouth_wide=0.45, brow_tilt=-0.9, brow_l=-0.5, brow_r=-0.5, pupil=(0.45, -0.45),
-           eye_l=0.86, eye_r=0.78, eye_smile=0.38, ear_l=0.3, ear_r=0.35, cheek=0.15, breath=0.6)
-STRAIN2 = panda.replace(STRAIN, lean=-7.5, paw_l=(25, 68), tilt=-7, eye_l=0.8, eye_r=0.7, eye_smile=0.45)
+STRAIN = P(yaw=0.38, head_yaw=0.36, pitch=0.12, tilt=-9, lean=-11, head_dx=4, paw_l=(22, 68), paw_r=(46, 72),
+           mouth_open=0.22, smile=0.0, mouth_wide=0.5, brow_tilt=-0.9, brow_l=-0.5, brow_r=-0.7, pupil=(0.45, -0.45),
+           eye_l=0.92, eye_r=0.3, eye_smile=0.45, ear_l=0.75, ear_r=0.8, cheek=0.45, breath=0.6, squash=1.03)
+STRAIN2 = panda.replace(STRAIN, lean=-12.5, paw_l=(20, 67), tilt=-10, eye_l=0.85, eye_r=0.22)
 ANTIC = panda.replace(STRAIN, lean=-1.5, head_dx=8, pitch=-0.2, paw_l=(34, 73), tilt=-2, eye_l=0.95, eye_r=0.95,
-                      ear_l=0.0, ear_r=0.0, squash=0.97, eye_smile=0.0)
-TUG = panda.replace(STRAIN, lean=-14, head_dx=1, pitch=0.3, tilt=-11, paw_l=(13, 63), squeeze=1.0, eye_l=0.0,
-                    eye_r=0.0, ear_l=-0.5, ear_r=-0.5, cheek=0.5, mouth_wide=0.6, squash=1.04, brow_l=-0.9, brow_r=-0.9)
-TUG2 = panda.replace(TUG, lean=-12, ear_l=0.95, ear_r=0.95, paw_l=(15, 64), squash=0.985)
+                      ear_l=0.0, ear_r=0.0, squash=0.92, eye_smile=0.0, cheek=0.0)
+TUG = panda.replace(STRAIN, lean=-18, head_dx=0, pitch=0.42, tilt=-14, paw_l=(13, 63), squeeze=1.0, eye_l=0.0,
+                    eye_r=0.0, ear_l=-0.5, ear_r=-0.5, cheek=0.5, mouth_wide=0.6, squash=1.09, brow_l=-0.9, brow_r=-0.9)
+TUG2 = panda.replace(TUG, lean=-14, ear_l=0.95, ear_r=0.95, paw_l=(15, 64), squash=0.985)
 SETTLE = panda.replace(STRAIN, lean=-5, pitch=0.05, tilt=-4, eye_l=0.9, eye_r=0.9, eye_smile=0.0, paw_l=(22, 66),
                        brow_tilt=-0.2, brow_l=0.0, brow_r=0.0, cheek=0.0, ear_l=0.1, ear_r=0.1)
 RELEASE = panda.replace(SETTLE, mouth_open=0.5, mouth_wide=-0.2, lean=-3, pitch=0.1, tilt=-1, brow_l=0.3, brow_r=0.3,
@@ -76,7 +76,8 @@ def tail_at(t):
     out = []
     for i in range(6):
         ti = t - i * 0.024
-        kf = [(0.0, REST[i]), (T_SWISH - 0.24, REST[i]), (T_SWISH - 0.02, UP[i]), (T_SWISH + 0.20, OUT[i]),
+        kf = [(0.0, REST[i]), (T_TUG - 0.04, REST[i]), (T_TUG + 0.12, UP[i]), (T_TUG + 0.62, REST[i], core.overshoot),
+              (T_SWISH - 0.24, REST[i]), (T_SWISH - 0.02, UP[i]), (T_SWISH + 0.20, OUT[i]),
               (T_SWISH + 0.66, REST[i], core.overshoot), (T_PLEASED - 0.1, REST[i]), (T_PLEASED + 0.5, CURL[i]),
               (T_PLEASED + 1.5, CURL[i])]
         v = core.keys(ti, kf)
@@ -103,6 +104,7 @@ def pose_fn(k):
         br = core.keys(t, [(T_PLEASED, 0.5), (T_PLEASED + 0.38, 1.0), (T_PLEASED + 0.7, 0.95), (T_PLEASED + 1.5, 0.2),
                            (T_PLEASED + 2.3, 0.55), (T_PLEASED + 3.2, 0.25)])
     return panda.replace(p, ear_l=e_l, ear_r=e_r, eye_l=p.eye_l * bl, eye_r=p.eye_r * bl, breath=br, tail=tail_at(t),
+                         wind=0.9 * ps.bump(t, T_TUG - 0.02, 0.05, 0.24), wind_dir=(1.0, 0.25),
                          tilt=p.tilt + 1.6 * (ps.bump(t, T_FLICK[0], 0.05, 0.2) - ps.bump(t, T_FLICK[1], 0.05, 0.2)))
 
 
@@ -151,13 +153,15 @@ def background(t, z, dx, dy):
     fireflies.draw(pic, cam, t + 9.0, n=10, region=(1460, 1930, 930, 1130), seed=12, color=(0.86, 1.0, 0.5),
                    amount=0.7, p_range=(0.6, 1.3), bokeh=7, blink=True)
     # the low sun out of frame on the left
-    ps.glow(pic, -160, 330, 1050, (1.0, 0.74, 0.42), 0.34, squash=0.8)
+    fireflies.draw(pic, cam, t + 5.0, n=22, region=(1440, 1680, 880, 1110), seed=13, color=(1.0, 0.84, 0.5),
+                   amount=1.3, p_range=(0.5, 1.6), bokeh=24, blink=False, rise=10, twinkle=0.5)
+    ps.glow(pic, -40, 330, 1000, (1.0, 0.74, 0.42), 0.55, squash=0.8)
     return pic
 
 
 def render(fl, n, f):
     t = fl / FPS
-    z = 1.0 + 0.08 * core.ease_io(core.span(t, 0.0, n / FPS), 1.5)
+    z = 1.0 + 0.12 * core.ease_io(core.span(t, 0.0, n / FPS), 1.5)
     dx, dy = common.drift(t, 3.0, 1)
     pic = background(t, z, dx, dy)
 
@@ -187,14 +191,15 @@ def render(fl, n, f):
     cel = core.Cel()
     tight = core.smooth(core.span(tk, T_TUG - 0.03, T_TUG + 0.05))
     ps.draw_strut(cel, knot, SDIR, s, TOD, drawing=common.twos(fl), spread=2.9 - 0.7 * tight)
-    an = panda.draw(cel, pm, px, py, s, TOD, drawing=k)
+    an = panda.draw(cel, pm, px, py, s, TOD, drawing=k,
+                    light=dict(color=(1.0, 0.82, 0.5), dir=(-0.9, -0.35), amount=0.85))     # the low sun on the left
 
     # the strands: knot to the teeth, knot to the pulling paw
     def units(v):
         return np.array([px - v[0] * s, py - v[1] * s])
 
     if tk < T_DROP and "mouth_l" in an:
-        vib = math.sin(tk * 90.0) * (1.2 + 2.0 * core.span(tk, T_TUG - 0.3, T_TUG)) * (0.3 if tk > T_TUG else 1.0)
+        vib = (1.0 if fl % 2 == 0 else -1.0) * (2.4 + 2.8 * core.span(tk, T_TUG - 0.3, T_TUG)) * (0.35 if tk > T_TUG else 1.0)
         m = an["mouth_l"]
         nrm = np.array([-(m - knot)[1], (m - knot)[0]]) / max(np.hypot(*(m - knot)), 1e-6)
         ps.draw_string(cel, [knot, (knot + m) / 2 + nrm * vib, m], s, TOD)
@@ -210,9 +215,9 @@ def render(fl, n, f):
         ps.draw_string(cel, ps.pendulum(knot, v0, tk - T_DROP2, damp=3.4, freq=7.5), s, TOD)
 
     # rack focus: opens on the knot and the paws, the face a little soft; it finds the face before the tug
-    u = core.smooth(core.span(t, 0.30, 0.85))
+    u = core.smooth(core.span(t, 0.22, 0.80))
     v = core.smooth(core.span(t, 2.8, 3.1))
-    layer = ps.rack(cel.rgba(), knot + np.array([30.0, 10.0]), 300.0 * z, 2.7 * (1 - u), 2.4 * u * (1 - 0.8 * v))
+    layer = ps.rack(cel.rgba(), knot + np.array([30.0, 10.0]), 300.0 * z, 3.4 * (1 - u), 2.4 * u * (1 - 0.8 * v))
     core.over(pic, layer)
 
     fore = ps.cached("s1_fore_v1", _fore)
