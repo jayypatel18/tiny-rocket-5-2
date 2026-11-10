@@ -27,7 +27,44 @@ XMAX = 1.32
 def camera(t, T):
     u = core.ease_io(core.span(t, -0.4, T + 0.8), 1.5)
     dx, dy = common.drift(t, 1.6, 8)
-    return core.Camera(cx=W / 2 + 120.0 * u + dx, cy=H / 2 - 8.0 * u + dy, dolly=core.lerp(1.0, 1.12, u), pan=34.0 * core.smooth(core.span(t, 1.0, T + 0.8)))
+    # the cut opens a little tighter on the climbing rocket (lower left), and eases
+    # out to the wide framing as it ignites
+    t_ign = common.cue("star_arc", NAME)[0]
+    tight = 1.0 - core.ease_io(core.span(t, 0.12, t_ign + 0.08), 2.0)
+    return core.Camera(cx=W / 2 + 120.0 * u + dx, cy=H / 2 - 8.0 * u + dy, dolly=core.lerp(1.0, 1.12, u),
+                       zoom=1.0 + 0.28 * tight,
+                       pan=34.0 * core.smooth(core.span(t, 1.0, T + 0.8)) - 440.0 * tight, tilt=-40.0 * tight)
+
+
+def _rocket(pic, cam, hx, hy, dirx, diry, fl):
+    """Our rocket, tiny, at the head of its trail: a dark silhouette against the
+    sunrise band, rim lit gold on the sun side, with a small flame."""
+    from .. import rocket
+    from .s7a_clouds import _flame
+    sc = 0.132 * cam.zoom
+    rot = math.atan2(dirx, -diry)
+    hpx = 500.0 * sc
+    fx_, fy_ = hx - math.sin(rot) * hpx * 0.45, hy + math.cos(rot) * hpx * 0.45     # the feet
+    bx, by = int(hx - 150), int(hy - 150)
+    rr = core.rng("s8rocket", fl)
+    st = rocket.State(fin_rattle=1.0, flame=1.0, light=0.6,
+                      shake=(float(rr.normal(0, 0.5)), float(rr.normal(0, 0.5)), float(rr.normal(0, 0.012))))
+    cel = core.Cel(w=300, h=300, ss=3, x0=bx, y0=by)
+    info = rocket.draw(cel, fx_, fy_, s=sc, tod="sunrise", drawing=fl, rot=rot, view="side", state=st)
+    lay = cel.rgba()
+    a = lay[..., 3:4]
+    dark = lay[..., :3] * 0.30 + np.array([0.10, 0.07, 0.17], np.float32) * a * 0.75
+    rim = np.clip(lay[..., 3] - np.roll(lay[..., 3], -2, axis=1), 0, 1)[..., None]   # the edge facing the sun (right)
+    rim2 = np.clip(lay[..., 3] - np.roll(lay[..., 3], 2, axis=0), 0, 1)[..., None] * 0.5   # and a little along the underside
+    k = np.clip(rim + rim2, 0, 1)
+    lay[..., :3] = dark * (1 - k) + np.array([1.0, 0.86, 0.52], np.float32) * k * a
+    fcel = core.Cel(w=300, h=300, ss=3, x0=bx, y0=by)
+    nx, ny = info["nozzle"]
+    _flame(fcel, nx, ny, rot, sc * 1.5, fl)
+    from .. import fx
+    fx.glow_at(pic, nx - math.sin(rot) * 10, ny + math.cos(rot) * 10, 26.0 * cam.zoom, (1.0, 0.72, 0.36), 0.55)
+    core.over(pic, fcel.rgba(), bx, by)
+    core.over(pic, lay, bx, by)
 
 
 def _bez2(p, q):
@@ -88,10 +125,13 @@ def _star(pic, cam, t, fl, t_ign, t_end):
     skymod._splat(glow, S[:, 0], S[:, 1], rad, col, amp)
     if t < t_ign:
         hx, hy = S[-1]
-        fk = 0.8 + 0.2 * math.sin(fl * 2.3)
-        skymod._splat(glow, np.array([hx]), np.array([hy]), np.array([2.2]), np.array([[1.0, 0.9, 0.7]]), np.array([1.3 * fk]))
-        skymod._splat(glow, np.array([hx]), np.array([hy]), np.array([9.0]), np.array([[1.0, 0.7, 0.4]]), np.array([0.3 * fk]))
+        # the young end of the thread catches the gold light
+        young = np.exp(-age_c / 0.45)
+        gcol = np.tile(np.array([[1.0, 0.84, 0.55]]), (n, 1))
+        skymod._splat(glow, S[:, 0], S[:, 1], rad * (0.9 + 0.5 * cam.zoom), gcol, 0.30 * young * np.clip(q * 14.0, 0, 1))
         pic[:] = 1 - (1 - np.clip(pic, 0, 1)) * (1 - np.clip(glow, 0, 1))
+        d = S[-1] - S[-8]
+        _rocket(pic, cam, float(hx), float(hy), float(d[0]), float(d[1]), fl)
         return float(hx), float(hy), 0.05
 
     # ---- the star

@@ -25,6 +25,10 @@ POSTER = os.path.join(ROOT, "docs", "poster.jpg")
 # Frames for the three stills (same three moments as the 5.1 stills). Set when the picture is final.
 STILLS = {"still-closeup.png": 56, "still-climax.png": 1308, "still-title.png": 1735}
 POSTER_FRAME = 1308
+# AAC encoding overshoots the wav's -1.3 dBTP peak (measured -0.9 dBFS in the first X file,
+# -1.7 with a 0.6 dB trim), so the muxed audio is trimmed 0.3 dB: under -1 dBTP after encoding
+# and still about -14 LUFS.
+AUDIO_TRIM = "volume=-0.3dB"
 
 
 def run(cmd):
@@ -56,11 +60,11 @@ def x():
     os.makedirs(os.path.dirname(XFILE), exist_ok=True)
     # the picture has film grain, so it is expensive to encode: step the quality down until
     # the file is safely under X's 500 MB (CRF 15 came out at 747 MB)
-    for crf in (18, 19, 20, 21, 22):
+    for crf in (15, 16, 17, 18, 19, 20, 21, 22):
         run(["ffmpeg", "-v", "error", "-y", "-i", MASTER, "-i", WAV, "-map", "0:v:0", "-map", "1:a:0",
              "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-profile:v", "high", "-pix_fmt", "yuv420p",
              "-r", str(FPS), "-g", "48", "-bf", "2", "-colorspace", "bt709", "-color_primaries", "bt709",
-             "-color_trc", "bt709", "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-shortest",
+             "-color_trc", "bt709", "-af", AUDIO_TRIM, "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-shortest",
              "-movflags", "+faststart", XFILE])
         mb = os.path.getsize(XFILE) / 1e6
         print("X file: %.1f MB at CRF %d" % (mb, crf))
@@ -79,7 +83,8 @@ def web():
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-passlogfile", log]
     run(base + venc + ["-pass", "1", "-an", "-f", "mp4", os.devnull])
     run(base + ["-i", WAV, "-map", "0:v:0", "-map", "1:a:0"] + venc +
-        ["-pass", "2", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest", "-movflags", "+faststart", WEB])
+        ["-pass", "2", "-af", AUDIO_TRIM, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest",
+         "-movflags", "+faststart", WEB])
     run(["ffmpeg", "-v", "error", "-y", "-i", MASTER, "-vf", "select=eq(n\\,%d)" % POSTER_FRAME, "-frames:v", "1",
          "-q:v", "3", POSTER])
     mb = os.path.getsize(WEB) / 1e6

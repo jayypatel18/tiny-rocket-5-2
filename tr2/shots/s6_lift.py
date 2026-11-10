@@ -27,6 +27,7 @@ RX = common.ROCKET_X
 IGN = common.cue("ignition", NAME)
 LIFT = common.cue("liftoff", NAME)
 BIRDS = common.cue("birds_burst", NAME)
+PASS = common.cue("passes_tree", NAME)
 F_IGN = int(round(IGN * FPS))
 ZOOM0 = 1.75
 GRID = dict(origin=(980.0, 420.0), nx=300, ny=176, cell=5.0)
@@ -210,29 +211,191 @@ def fields(fl):
 _bank = None
 
 
+def _dawn_sprite(kind, seed):
+    """One of the painted sky sprites (tr2/sky_paint.py), relit for the dawn seen
+    from below: cool violet tops that keep their form, an underside that glows
+    rose then gold. Returns the kind name to give to sky_paint.place."""
+    from .. import sky_paint as sp
+    name = kind + "@dawn"
+    if (name, seed, False) not in sp._MIPS:
+        F = sp.cloud_sprite(kind, seed).copy()
+        L, U = F[..., 1], np.clip(F[..., 2] * 1.15, 0, 1)
+        u = U * U * (3 - 2 * U)
+        F[..., 1] = np.clip(0.27 + 0.42 * (L - 0.45) + 0.56 * u, 0, 1)
+        sp.add_variant(name, seed, F)
+    return name
+
+
 def cloud_bank():
-    """The first clouds and the bank the rocket punches into, as static lobes in set coords."""
+    """The first clouds and the bank the rocket punches into: painted cloud sprites
+    at three depths (parallax 0.55, 1.0, 1.5) in set coords. Returns (clouds, base)."""
     global _bank
     if _bank is None:
+        from .. import sky_paint as sp
         rg = core.rng("s6 clouds")
-        lob = fx_smoke.Lobes(seed=77)
         y_end = gy() - height(7.0)
         base = y_end + 190.0
-        # the bank: a deck of heaped lobes, every one crowned with smaller ones, its underside scalloped
-        for i in range(30):
-            x = 640.0 + i * 88.0 + rg.normal(0, 34)
-            dip = 80.0 * math.sin(i * 0.9) + rg.normal(0, 30)
-            lob.spawn(-100.0, x, base + dip - 150.0, 3, r=(50.0, 190.0), jit=(70.0, 90.0), life=(1e6, 1e6),
-                      rise=0.0, grow=0.0, key=i, pw=1.5, kids=5, kid_min=0.0)
-            lob.spawn(-100.0, x, base + dip - 470.0, 2, r=(170.0, 330.0), jit=(80.0, 150.0), life=(1e6, 1e6),
-                      rise=0.0, grow=0.0, key=100 + i, pw=1.2, kids=4, kid_min=0.0)
-        # the first small clouds on the way up: flat heaps, never a row of beads
-        for j, (x, y, n, rr) in enumerate(((1180.0, base + 560.0, 6, 86.0), (2360.0, base + 400.0, 7, 96.0),
-                                           (2180.0, base + 820.0, 4, 54.0))):
-            lob.spawn(-100.0, x, y, n, r=(rr * 0.45, rr), jit=(rr * 1.5, rr * 0.22), life=(1e6, 1e6), rise=0.0,
-                      grow=0.0, key=300 + j, pw=1.3, up_only=True, kids=5, kid_min=0.0)
-        _bank = (lob.alive(0.0), base)
+        its = []
+
+        def add(p, x, ye, kind, seed, sc, op=1.0, bank=False):
+            # ye is where the cloud would sit at parallax 1; other depths are shifted so that
+            # they cross the middle of the frame at the same moment of the tilt
+            y = ye - (p - 1.0) * 0.35 * (890.0 - ye)
+            its.append(dict(p=p, x=float(x), y=float(y), kind=_dawn_sprite(kind, seed), seed=int(seed), sc=float(sc), op=op,
+                            h=sp.SIZES[kind][1], bank=bank))
+
+        # the bank: heaped cumulus right across, a taller tier behind, undersides scalloped
+        x, k = 380.0, 0
+        while x < 3350.0:
+            scb = rg.uniform(0.72, 1.0)
+            kind = "cumulus"
+            rg.random()
+            dip = 70.0 * math.sin(k * 0.9) + rg.normal(0, 26)
+            h = sp.SIZES[kind][1] * scb
+            if k % 2 == 0:
+                add(1.0, x + rg.normal(0, 60), base + dip - 290.0 - 0.34 * 540 * scb * 1.15, "cumulus",
+                    int(rg.integers(0, 7)), scb * 1.15, 0.97, bank=True)
+            add(1.0, x, base + dip - 0.34 * h + 24.0, kind, int(rg.integers(0, 7 if kind == "cumulus" else 4)), scb, 0.95, bank=True)
+            x += 235.0 * scb * rg.uniform(0.8, 1.2)
+            k += 1
+        # the first small clouds on the way up
+        for (x, dy, kind, seed, sc) in ((1180.0, 560.0, "cumulus", 2, 0.50), (2360.0, 400.0, "cumulus", 4, 0.56),
+                                        (2180.0, 820.0, "bar", 1, 0.36), (1440.0, 230.0, "bar", 3, 0.50),
+                                        (2560.0, 1000.0, "cumulus", 5, 0.40)):
+            add(1.0, x, base + dy, kind, seed, sc)
+        # far: small, hazy, slower; kept clear of the rocket's column
+        for j in range(9):
+            x = rg.uniform(620.0, 1380.0) if j % 2 == 0 else rg.uniform(2250.0, 3050.0)
+            kind = ("cumulus", "bar", "cumulus", "band")[j % 4]
+            add(0.55, x, base + rg.uniform(-150.0, 1150.0), kind, int(rg.integers(0, 6)), rg.uniform(0.28, 0.46))
+        # near: big, out of focus, sliding past faster; the last one is mist across the rocket itself
+        for (x, dy, kind, seed, sc, op) in ((800.0, 330.0, "cumulus", 1, 1.25, 0.92), (2800.0, 700.0, "cumulus", 3, 1.1, 0.92),
+                                            (2520.0, 120.0, "cumulus", 6, 1.3, 0.92), (980.0, -80.0, "cumulus", 0, 1.4, 0.92),
+                                            (1800.0, -260.0, "wisp", 2, 1.7, 0.55)):
+            add(1.5, x, base + dy, kind, seed, sc, op)
+        its.sort(key=lambda it: it["y"])
+        # the bank is one painting: compose its sprites once as cloud FIELDS (alpha, light,
+        # underside) on a strip in set coords, so a frame colours and places it in one go
+        bk = [it for it in its if it["bank"]]
+        X0 = 250.0
+        Y0 = min(it["y"] - it["h"] * it["sc"] * 0.5 for it in bk) - 10.0
+        Y1 = max(it["y"] + it["h"] * it["sc"] * 0.5 for it in bk) + 10.0
+        Fb = np.zeros((int(Y1 - Y0), 3400, 3), np.float32)
+        for it in bk:
+            Fm = sp.mips(it["kind"], it["seed"])[0]
+            hh, ww = Fm.shape[:2]
+            fx0, fy0 = it["x"] - X0 - ww * it["sc"] / 2, it["y"] - Y0 - hh * it["sc"] / 2
+            xa, ya = max(int(math.floor(fx0)), 0), max(int(math.floor(fy0)), 0)
+            xb, yb = min(int(fx0 + ww * it["sc"]) + 2, Fb.shape[1]), min(int(fy0 + hh * it["sc"]) + 2, Fb.shape[0])
+            if xb <= xa or yb <= ya:
+                continue
+            Fw = core.warp(Fm, it["sc"], fx0 - xa, fy0 - ya, out_hw=(yb - ya, xb - xa))
+            reg = Fb[ya:yb, xa:xb]
+            a_s = Fw[..., 0:1]
+            a_n = a_s + reg[..., 0:1] * (1 - a_s)
+            reg[..., 1:] = (Fw[..., 1:] * a_s + reg[..., 1:] * reg[..., 0:1] * (1 - a_s)) / np.maximum(a_n, 1e-4)
+            reg[..., 0:1] = a_n
+        global _bank_strip
+        _bank_strip = (Fb, X0, Y0)
+        _bank = ([it for it in its if not it["bank"]], base)
     return _bank
+
+
+_bank_strip = None
+DAWN_TONES = [np.array(c, np.float32) for c in ((0.33, 0.37, 0.60), (0.49, 0.51, 0.73), (0.78, 0.62, 0.74),
+                                                (1.00, 0.76, 0.70), (1.00, 0.89, 0.66))]
+
+
+def ascent_clouds(pic, cam, bank, noz, hid, s):
+    """Draw the cloud_bank() clouds over the picture, three depths back to front. The faces
+    nearest the flame (screen point noz) take its warm light; hid 0..1 = how deep the rocket
+    is inside the bank (glow through the mist)."""
+    from .. import sky_paint as sp
+    skyc = np.array([0.38, 0.46, 0.72], np.float32)
+    lays = {0.55: np.zeros((core.H, core.W, 4), np.float32), 1.0: np.zeros((core.H, core.W, 4), np.float32),
+            1.5: np.zeros((core.H // 2, core.W // 2, 4), np.float32)}
+    haze = {0.55: 0.46, 1.0: 0.08, 1.5: 0.0}
+    Fb, X0, Y0 = _bank_strip
+    s1, tx1, ty1 = cam.xf(1.0)
+    ya, yb = max(int(math.floor(Y0 * s1 + ty1)), 0), min(int((Y0 + Fb.shape[0]) * s1 + ty1) + 2, core.H)
+    if yb > ya:
+        Fw = core.warp(Fb, s1, tx1 + X0 * s1, ty1 + Y0 * s1 - ya, out_hw=(yb - ya, core.W))
+        cols = [palette.mix(c, skyc, haze[1.0] * (0.95 if i < 2 else 0.7)) for i, c in enumerate(DAWN_TONES)]
+        # soft mist behind the bank: it closes the small gaps between heaps (a notch of dark sky
+        # showed between two of them) and gives the bank a glowing edge
+        am = (np.clip(core.gblur(Fw[..., 0], 26.0) * 1.7, 0, 1) * 0.9).astype(np.float32)
+        mc = palette.mix(cols[2], cols[3], 0.5)
+        core.over_rgba(lays[1.0][ya:yb], core.premul(np.broadcast_to(mc, Fw.shape).astype(np.float32).copy(), am))
+        core.over_rgba(lays[1.0][ya:yb], sp.colourise(Fw, cols, 0.95))
+    for it in bank:
+        p = it["p"]
+        sp_, _, _ = cam.xf(p)
+        x, y = cam.pt(it["x"], it["y"], p)
+        y += (p - 1.0) * 0.35 * cam.tilt                      # nearer cloud slides down faster in the tilt
+        hh = it["h"] * it["sc"] * sp_ * 0.6
+        if y < -hh or y > core.H + hh or x < -900 or x > core.W + 900:
+            continue
+        cols = [palette.mix(c, skyc, haze[p] * (0.95 if i < 2 else 0.7)) for i, c in enumerate(DAWN_TONES)]
+        res = 2.0 if p == 1.5 else 1.0
+        sp.place(lays[p], it["kind"], it["seed"], x / res, y / res, it["sc"] * sp_ / res, cols, op=it["op"])
+    core.over(pic, lays[0.55])
+    mid = lays[1.0]
+    # the flame lights the faces nearest to it
+    yy, xx = np.mgrid[0:core.H, 0:core.W].astype(np.float32)
+    g = np.exp(-(((xx - noz[0]) ** 2 + (yy - noz[1]) ** 2) / (300.0 * s) ** 2))
+    warm = np.array([1.0, 0.62, 0.30], np.float32)
+    mid[..., :3] = np.minimum(mid[..., :3] + (g * 0.55)[..., None] * warm * mid[..., 3:4], mid[..., 3:4] * 1.0)
+    if hid > 0.02:
+        fx.glow_at(pic, noz[0], noz[1], 150.0 * s, (1.0, 0.70, 0.40), 0.5 * hid)
+    core.over(pic, mid)
+    near = core.warp(core.gblur(lays[1.5], 2.6), 2.0, 0.5, 0.5)
+    near[..., :3] = np.minimum(near[..., :3] + (g * 0.35)[..., None] * warm * near[..., 3:4], near[..., 3:4])
+    core.over(pic, near)
+    if hid > 0.02:
+        fx.glow_at(pic, noz[0], noz[1] - 30 * s, 170.0 * s, (1.0, 0.78, 0.52), 0.30 * hid)
+
+
+def leaves_layer(cam, t, fl):
+    """A dozen leaves torn out of the canopy as the rocket passes: each whips up after it,
+    spins and flips, and is smeared along its path (on ones)."""
+    rg = core.rng("s6 leaves")
+    T = palette.TOD[TOD]
+    cel = None
+    for i in range(7):
+        t0 = PASS - 0.32 + rg.uniform(0, 0.8)
+        p0 = np.array([rg.uniform(1330.0, 1560.0), rg.uniform(400.0, 770.0)])
+        v0 = np.array([rg.uniform(160.0, 640.0), -rg.uniform(420.0, 980.0)])
+        # director: leaf sized (about 30 to 45 px long on screen), not paddle sized
+        kd, size, spin = rg.uniform(1.4, 2.4), rg.uniform(14.0, 22.0), rg.uniform(3.2, 6.5) * rg.choice([-1.0, 1.0])
+        ph, flut, par, pale = rg.uniform(0, 6.28), rg.uniform(20.0, 60.0), rg.uniform(0.95, 1.3), rg.random() < 0.4
+        tau = t - t0
+        if tau <= 0 or tau > 2.8:
+            continue
+
+        def pos(tt):
+            e = math.exp(-kd * tt)
+            return p0 + v0 * (1 - e) / kd + np.array([flut * math.sin(tt * 5.0 + ph) + 70.0 * tt, 130.0 * tt * tt])
+
+        a = np.array(cam.pt(*pos(tau), par))
+        b = np.array(cam.pt(*pos(max(tau - 0.04, 0.0)), par))
+        if not (-60 < a[0] < core.W + 60 and -60 < a[1] < core.H + 60):
+            continue
+        if cel is None:
+            cel = core.Cel(ss=2)
+        sc = cam.xf(par)[0] * size
+        rot = ph + spin * tau
+        flip = 0.22 + 0.78 * abs(math.cos(tau * spin * 0.7 + 2 * ph))
+        base = np.array([0.20, 0.40, 0.20] if pale else [0.14, 0.31, 0.17], np.float32)
+        col = palette.lit(base, T)
+        edge = np.array([0.62, 0.72, 0.36], np.float32)
+        dk = palette.shade(base, T) * 0.8
+        cel.stroke(np.array([b, a]), max(sc * 0.55 * flip, 1.5), dk, taper=(0.8, 0.0), min_w=0.08)      # the smear
+        leaf = np.array([(-1, 0), (-0.4, 0.42 * flip), (0.35, 0.36 * flip), (1, 0), (0.35, -0.36 * flip), (-0.4, -0.42 * flip)])
+        leaf = core.xform(core.catmull(leaf, n=5), scale=sc, rot=rot, tx=a[0], ty=a[1])
+        cel.fill(leaf, col)
+        cel.stroke(leaf[:len(leaf) // 2 + 1], max(sc * 0.14, 1.4), edge, taper=(0.25, 0.25))      # the lit edge
+        cel.stroke(core.xform(np.array([(-1.0, 0.0), (1.0, 0.0)]), scale=sc, rot=rot, tx=a[0], ty=a[1]), 1.3, dk)
+    return None if cel is None else cel.rgba()
 
 
 # ------------------------------------------------------------------ the frame
@@ -262,7 +425,12 @@ def render(fl, n, f):
         if ground_on:
             hs.render_back(pic, cam, TOD, f, wind=wind, flatten=flat,
                            rocket_shadow=1.0 - core.smooth(core.span(t, IGN, LIFT)),
-                           fire=(RX, g0 - 10.0, 430.0, fire_amt) if fire_amt > 0.01 else None)
+                           fire=(RX, g0 - 10.0, 300.0, 0.8 * fire_amt) if fire_amt > 0.01 else None)
+            if burning:
+                # the near slope falls into dark so the fire and the lit smoke carry the frame
+                rows = np.arange(core.H, dtype=np.float32)
+                fall_ = np.clip((rows - ((g0 + 70.0) * s + ty)) / (300.0 * s), 0, 1)
+                pic *= (1.0 - 0.5 * fall_ * fall_ * (3 - 2 * fall_))[:, None, None]
     except Exception as e:  # noqa
         print("s6 hillset:", repr(e)[:200])
         hs = None
@@ -290,13 +458,15 @@ def render(fl, n, f):
     fire_xy = (end[0], end[1] - 14 * s * foot)
     smoke = None
     if burning and len(fd["lobes"]):
-        smoke = fx_smoke.render(fd["lobes"], fd["t"], f, TOD, (s, tx, ty), seed=6, soft=4.5, haze=0.36,
+        smoke = fx_smoke.render(fd["lobes"], fd["t"], f, TOD, (s, tx, ty), seed=6, soft=4.5, haze=0.36, warm_top=0.0,
+                                dark=((g0 - 215.0) * s + ty, (g0 + 40.0) * s + ty, 0.88),
                                 fire=(fire_xy[0], fire_xy[1], flick * (0.55 + 0.45 * near), 410.0 * s * max(m["scale"], 0.5)))
     fl_lay = None
     if burning:
-        fl_lay = fx_smoke.flame(fl, (s, tx, ty), F=fd["F"] if ground_on else None,
+        fl_lay = fx_smoke.flame(fl, (s, tx, ty), F=fd["F"] if (ground_on and m["H"] < 200.0) else None,
                                 grid=(GRID["origin"][0], GRID["origin"][1], GRID["cell"]),
-                                jet=(noz[0], noz[1] - 4 * sc, end[0], end[1], 24.0 * sc, 44.0 * sc, foot), seed=6)
+                                jet=(noz[0], noz[1] - 4 * sc, end[0], end[1], 24.0 * sc, 44.0 * sc, foot), seed=6,
+                                focus=(gsx, gsy - 20 * s, 300.0 * s))
     if not burning:
         # the stillness is ending: the fuse fizzes under the skirt
         k = 0.25 + 0.75 * t / max(IGN, 1e-3)
@@ -330,58 +500,44 @@ def render(fl, n, f):
                              xf=(s, tx, ty), speed=(120.0, 620.0), size=0.5, dur=1.2, gravity=1100.0)
         core.over(pic, sp)
     elif ground_on and ti < 3.2:
-        sp = fx.sparks_layer(ti, (RX + 4.0, g0 - 10.0), seed=5, n=420, ground_y=lambda x: gy(x) + 6.0, frame=f,
-                             xf=(s, tx, ty), dur=LIFT - IGN + 0.35, size=0.95)
+        sp = fx.sparks_layer(ti, (RX + 4.0, g0 - 10.0), seed=5, n=170, ground_y=lambda x: gy(x) + 6.0, frame=f,
+                             xf=(s, tx, ty), dur=LIFT - IGN + 0.35, size=0.5, shutter=1.0 / 15.0)
         core.over(pic, sp)
     if burning:
-        fx.glow_at(pic, noz[0], noz[1] + 60 * sc, 120.0 * sc, (1.0, 0.72, 0.36), 0.26)
+        fx.glow_at(pic, noz[0], noz[1] + 60 * sc, 190.0 * sc, (1.0, 0.66, 0.30), 0.40)
+        fx.glow_at(pic, noz[0], noz[1] + 34 * sc, 64.0 * sc, (1.0, 0.92, 0.70), 0.50)
 
     # the birds burst out of the camphor tree
     if t >= BIRDS - 0.05:
         try:
             from .. import birds
             flock = birds.Flock([(1260.0, 470.0), (1390.0, 530.0), (1150.0, 440.0), (1450.0, 610.0), (1320.0, 590.0),
-                                 (1060.0, 520.0)], n=36, heading=(0.72, -0.62), seed=6)
-            core.over(pic, birds.draw_flock(flock, cam, t - BIRDS, f, None))
+                                 (1060.0, 520.0)], n=22, heading=(0.72, -0.62), seed=6)
+            core.over(pic, birds.draw_flock(flock, cam, t - BIRDS, f, None, col=(0.50, 0.43, 0.55),
+                                            light=(1.28, 1.06, 1.02), base_size=32.0))
         except Exception as e:  # noqa
             print("s6 birds:", repr(e)[:200])
+
+    lv_ = leaves_layer(cam, t, fl)
+    if lv_ is not None:
+        core.over(pic, lv_)
 
     # grass in front of everything on the hill
     if hs is not None and ground_on:
         try:
             if not burning:
                 core.over(pic, hs.grass_band(cam, TOD, f, 1150, 2300, flatten=flat))
-            core.over(pic, hs.render_front(cam, TOD, f, wind=wind, defocus=common.dof(1.0, 5.0), flatten=flat))
+            fr = hs.render_front(cam, TOD, f, wind=wind, defocus=common.dof(1.0, 5.0), flatten=flat)
+            fr[..., :3] *= 0.46 if burning else 0.72          # the near grass stands dark against the fire
+            core.over(pic, fr)
         except Exception as e:  # noqa
             print("s6 front:", repr(e)[:200])
 
     # the first clouds, then the bank that swallows the rocket
     bank, base = cloud_bank()
-    if (base + 900.0) * s + ty > -40:
-        # painted, a little out of focus: the lobes give the masses, then they are softened hard, the
-        # dawn puts a rose band along every lower edge, and a brushed texture breaks the fills
-        ctod = palette.blend_tod("launch", "sunrise", 0.5)
-        q = 0.5
-        h2, w2 = core.H // 2, core.W // 2
-        cl = fx_smoke.render(bank, 0.0, 0, ctod, (s * q, tx * q, ty * q), seed=31, hw=(h2, w2), soft=10.0, haze=0.5,
-                             warm_top=0.6)
-        lay = core.gblur(cl["layer"], 5.0)
-        al = lay[..., 3]
-        d = 16
-        below = np.zeros_like(al)
-        below[:-d] = al[d:]
-        edge = core.gblur(np.clip(al - below, 0, 1), 5.0)
-        rose = np.array([1.0, 0.70, 0.62], np.float32)
-        lay[..., :3] += (rose[None, None, :] * al[..., None] - lay[..., :3]) * (edge * 0.75)[..., None]
-        tex = core.fbm(h2, w2, 14.0, 3, seed=5, aspect=3.0, ox=-tx * q, oy=-ty * q)
-        lay[..., :3] *= (0.94 + 0.12 * tex)[..., None]
-        lay = np.ascontiguousarray(ndimage.zoom(lay, (2, 2, 1), order=1)[:core.H, :core.W], np.float32)
+    if (base + 1500.0) * s + ty > -40:
         hid = core.smooth(core.span((base - (g0 - m["H"])), -40.0, 120.0))     # how deep the rocket is in the bank
-        if hid > 0.02:
-            fx.glow_at(pic, noz[0], noz[1], 150.0 * s, (1.0, 0.70, 0.40), 0.5 * hid)
-        core.over(pic, lay)
-        if hid > 0.02:
-            fx.glow_at(pic, noz[0], noz[1] - 30 * sc, 170.0 * s, (1.0, 0.78, 0.52), 0.30 * hid)
+        ascent_clouds(pic, cam, bank, noz, hid, s)
 
     # ignition hits like a wall: one white frame, two blown out, then it settles
     opts = dict(bloom_amt=0.62, bloom_thr=0.80)

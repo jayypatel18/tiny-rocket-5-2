@@ -32,6 +32,18 @@ Start: 2026-11-10 01:55 IST. All times below are from `TZ=Asia/Kolkata date`.
 - 02:34 s7a_clouds.py: rocket (D's rocket.draw, side view), cel flame, cel smoke lobes left behind in the stream, spray at the break, god rays through fx.light_shafts.
 - 02:36 contact sheets of both cuts in build/review/.
 
+- 02:37 to 02:40 polish: trail and glitter, cloud rows drift left on the wind, small cel boxes for rocket, flame and smoke (s7a about 3 s a frame on one thread), smoke redrawn as one cel silhouette with one hard shadow.
+- 02:40 to 05:53 cut off by a usage limit. No work in this gap.
+- 05:53 to 05:56 director's polish list. s8: head with a 26 px white core, wide bloom, four breathing spikes; trail with white core and gold to rose edge tapering over 60 percent of the arc; stronger light pool, river glint that runs with the star; camera cx travel 120 px, pan 34 px after ignition; ignition is one white frame then two heavy bloom frames. s7a: rocket s 0.96 (about 480 px), lean 0.075 rad, hard shake on ones; climb accelerates and its rate drives the vertical smear; larger spray puffs.
+- next round: s8 opens tighter (zoom 1.28, pan and tilt toward the rocket) and eases out by ignition; `_rocket` draws D's rocket tiny as a dark silhouette with a gold rim and a small flame at the head of the thread.
+
+- 06:25 to 06:30 s8: opening tightened on the tiny rocket silhouette; ignition frames 1224 to 1226 checked.
+- 08:35 to 08:50 s6_lift.py (D's cut, mine for this round only): `cloud_bank()` now returns painted sprite clouds at three depths (0.55, 1.0, 1.5), relit for the dawn from below with `_dawn_sprite` (cool tops, rose then gold underside; registered through the new `sky_paint.add_variant`); `ascent_clouds()` draws them where D's inline block was, with flame light on the near faces and D's two glow calls for the punch into the bank. The bank is pre composed into one field strip (`_bank_strip`) for speed. Birds: n 22, base_size 32, lighter body, pale rose light. Leaves: 7, larger, slower spin, dark green with a lit edge.
+- Timing could NOT be verified: load average was 125 to 160 during the tests (a warm s6 frame took 18 to 24 s, everything was slow).
+- Found, not fixed: a dark triangular notch in the high dawn sky (visible near the top of frame 1020). It is a gap between two `wisp` sprites whose streaks are cut by the sprite box. Fix when no render is running: in `sky_paint.cloud_fields`, wisp branch, halve `bend` (0.16 to 0.08) and the tilt factor (0.4 to 0.2), and give wisps a new cache key.
+
+- 08:55 to 09:05 the notch in frame 1020: my first diagnosis (wisp sprites cut by their box, in sky.py) was WRONG. Rendering the sky alone showed no notch. I had added an optional soft wisp variant; it is fully removed again, sky.py and the sky sprites are exactly as before, so no other cut changes. The real cause: a gap of dark sky between two heaps of the upper tier of the s6 cloud bank. Fixed inside `s6_lift.ascent_clouds` only, with a soft mist layer behind the bank (blurred bank alpha). Bank uses cumulus only now. Frame 1020 renders in about 7 s including process start. Birds call left as set (director is redrawing wings in birds.py).
+
 ## Known weak points (update as fixed)
 - Cumulus sprites are still a little chunky and popcorn like in close view; tone shapes are blobs at scales above 1.
 - sky.render costs about 0.8 s (budget 0.8).

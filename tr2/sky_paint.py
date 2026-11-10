@@ -445,3 +445,14 @@ def place(dst, kind, seed, cx, cy, sc, cols, op=1.0, dl=0.0, flip=False):
             Fw[..., 1] = np.clip(Fw[..., 1] + dl, 0, 1)
         rgba = colourise(Fw, cols, op)
     core.over_rgba(dst[Y0:Y1, X0:X1], rgba)
+
+
+def add_variant(name, seed, F):
+    """Register cloud fields under a made up kind name (a relit copy of a sprite,
+    say), so place() can draw them like any other kind."""
+    lv = [np.ascontiguousarray(F, np.float32)]
+    while lv[-1].shape[1] > 24:
+        a = lv[-1]
+        a = a[:a.shape[0] // 2 * 2, :a.shape[1] // 2 * 2]
+        lv.append(a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2, 3).mean(axis=(1, 3)))
+    _MIPS[(name, seed, False)] = lv

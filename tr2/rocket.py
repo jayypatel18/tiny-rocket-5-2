@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from . import core, palette
 
@@ -721,6 +721,7 @@ class _Close:
         self.ink = self.T["ink"]
         self.sun_r = self.T["sun"][0] >= 0
         self.sg = 1.0 if self.sun_r else -1.0
+        self.name = tod if isinstance(tod, str) else str(tod.get("name", ""))
         self.light = float(light or 0.0)
         self.lw = 4.4 * max(0.5, self.k) ** 0.8
         self.n = 0
@@ -855,39 +856,192 @@ def _strap(q, pts, width):
            q.shd(brass, 1.2), ink=0.5, amp=0.3)
 
 
+AMBER = np.array([1.0, 0.72, 0.40], np.float32)
+
+
+def _to_cel(cel, arr):
+    """A 1x float RGB field as a PIL image the size of the supersampled cel."""
+    im = Image.fromarray((np.clip(arr, 0, 1) * 255.0 + 0.5).astype(np.uint8), "RGB")
+    return im.resize(cel.im.size, Image.BILINEAR)
+
+
+def _apply_paint(cel, mult, hi, cx, cy, rad, outside):
+    """Multiply and screen soft fields into what is already drawn on the cel, either outside
+    or inside the circle (cx, cy, rad). The alpha of the cel is untouched."""
+    rgb = cel.im.convert("RGB")
+    al = cel.im.getchannel("A")
+    new = ImageChops.multiply(rgb, _to_cel(cel, mult))
+    if hi is not None:
+        new = ImageChops.screen(new, _to_cel(cel, hi))
+    m = Image.new("L", cel.im.size, 255 if outside else 0)
+    ss = cel.ss
+    box = [(cx - cel.x0 - rad) * ss, (cy - cel.y0 - rad) * ss, (cx - cel.x0 + rad) * ss, (cy - cel.y0 + rad) * ss]
+    ImageDraw.Draw(m).ellipse(box, fill=0 if outside else 255)
+    out = Image.composite(new, rgb, m)
+    out.putalpha(al)
+    cel.im = out
+    cel.d = ImageDraw.Draw(cel.im)
+
+
+def _grid(cel):
+    yy, xx = np.mgrid[0:cel.h, 0:cel.w].astype(np.float32)
+    return xx + cel.x0, yy + cel.y0
+
+
+def _paint_wall(q, cel, cx, cy, r, hole_r, inside=False, flood=0.0):
+    """Porcelain as a painted surface, not a flat fill: the cup is round, so the wall is lighter
+    toward the light and falls off slowly to the shadow side; the glaze is mottled and carries a
+    faint brush; the brass rim lays a soft contact shadow; one broad soft highlight sits on the glaze."""
+    xx, yy = _grid(cel)
+    k = q.k
+    dist = np.hypot(xx - cx, yy - cy)
+    cup = R["cup"]
+    mott = core.fbm(cel.h, cel.w, 210.0 * k, 3, seed=71, ox=cel.x0, oy=cel.y0)
+    brush = core.fbm(cel.h, cel.w, 10.0 * k, 2, seed=72, ox=cel.x0, oy=cel.y0, aspect=7.0)
+    grain = core.fbm(cel.h, cel.w, 2.4, 2, seed=73)
+    v = 1.0 - (0.10 * (1 - mott) + 0.055 * (1 - brush) + 0.03 * (1 - grain))
+    extra = None
+    dim = 1.0
+    if not inside:
+        # a round hull turning away from the light: darkest at the far edge, dark again at the near
+        # edge and toward the bottom; the value runs from about 0.35 to 0.9 of the local colour
+        ratio = np.clip(palette.shade(cup, q.T) / np.maximum(palette.lit(cup, q.T), 1e-3), 0, 1)
+        ratio = ratio / max(float(ratio.mean()), 1e-3) * 0.36
+        half = 0.5 * cel.w
+        c = (xx - (cel.x0 + half + q.sg * 0.20 * half)) / (1.12 * half)
+        c = c + 0.05 * ((yy - cy) / r) ** 2 * np.sign(c)
+        lam = np.sqrt(np.clip(1 - c * c, 0, 1))
+        vb = np.clip((yy - (cy + 0.1 * r)) / (1.7 * r), 0, 1)
+        val = lam ** 1.5 * (1 - 0.55 * vb * vb)
+        sa = math.atan2(q.T["sun"][1], q.T["sun"][0])
+        dn = ((xx - cx) * math.cos(sa) + (yy - cy) * math.sin(sa)) / np.maximum(dist, 1.0)
+        cs = np.exp(-np.clip(dist - 1.25 * r, 0, None) / (0.085 * r)) * (0.34 + 0.26 * (0.5 - 0.5 * dn))
+        gt = np.clip(1 - val + cs, 0, 1)
+        g = gt
+        sag = 0.03 * r * ((xx - cx) / r) ** 2
+        inband = ((yy > cy - 1.44 * r + sag) & (yy < cy - 0.80 * r + sag)).astype(np.float32)
+        streak = core.fbm(cel.h, cel.w, 5.0 * k, 2, seed=74, ox=cel.x0, oy=cel.y0, aspect=14.0)
+        v = v * (1 - inband * (0.20 * (1 - streak) + 0.08 * (1 - mott))) * 0.92
+        hx, hy = cx + q.sg * 1.85 * r, cy - 0.10 * r
+        hi = 0.27 * np.exp(-(((xx - hx) / (0.40 * r)) ** 2 + ((yy - hy) / (1.0 * r)) ** 2)) * (1 - 0.7 * inband)
+        # a warm bounce from below, and the first rose of the sky along the edge that faces it
+        bounce = 0.11 * np.exp(-((yy - (cel.y0 + cel.h)) / (0.55 * r)) ** 2) * (0.4 + 0.6 * lam)
+        xe = cel.x0 + cel.w if q.sun_r else cel.x0
+        edge = 0.15 * np.exp(-((xx - xe) / (0.42 * r)) ** 2)
+        extra = bounce[..., None] * np.array([1.0, 0.66, 0.44], np.float32) + edge[..., None] * np.clip(q.T["rim"], 0, 1)
+        dim = {"predawn": 0.72, "night": 0.62, "launch": 0.78}.get(q.name, 0.95)
+        dim = dim + (1.0 - dim) * min(1.0, q.light) * 0.7
+    else:
+        ratio = np.array([0.52, 0.50, 0.62], np.float32)
+        g = np.clip((dist - 1.15 * r) / (3.4 * r), 0, 1)
+        g = g * g * (3 - 2 * g)
+        side = np.clip((np.abs(xx - cx) - 1.6 * r) / (2.2 * r), 0, 1)
+        cs = np.exp(-np.clip(dist - 1.16 * r, 0, None) / (0.06 * r)) * 0.22
+        gt = np.clip(0.10 + 0.55 * g + 0.45 * side * side + cs * (1 - flood), 0, 1)
+        hi = (0.10 + 0.30 * flood) * np.exp(-((dist - 1.30 * r) / (0.34 * r)) ** 2)
+    mult = (1 - gt[..., None] * (1 - ratio)) * v[..., None] * dim
+    hic = hi[..., None] * np.clip(palette.rim(cup, q.T), 0, 1) * dim
+    if extra is not None:
+        hic = hic + extra * dim
+    _apply_paint(cel, mult, hic, cx, cy, hole_r, outside=True)
+
+
+def _amber(q, cel, cx, cy, r):
+    """The cockpit's own light on whatever sits behind the glass: a soft amber veil that is
+    strongest toward the dial (lower right) and the lantern (above), so it falls on the face."""
+    xx, yy = _grid(cel)
+    d1 = np.hypot(xx - (cx + 0.63 * r), yy - (cy + 0.47 * r))
+    d2 = np.hypot(xx - (cx - 0.30 * r), yy - (cy - 0.80 * r))
+    al = 0.24 * np.exp(-(d1 / (0.85 * r)) ** 2) + 0.15 * np.exp(-(d2 / (0.8 * r)) ** 2)
+    al = al * np.clip((r - np.hypot(xx - cx, yy - cy)) / 3.0, 0, 1)
+    a8 = Image.fromarray((np.clip(al, 0, 1) * 255.0 + 0.5).astype(np.uint8), "L").resize(cel.im.size, Image.BILINEAR)
+    ov = Image.new("RGBA", cel.im.size, _rgba_amber())
+    ov.putalpha(a8)
+    cel.im = Image.alpha_composite(cel.im, ov)
+    cel.d = ImageDraw.Draw(cel.im)
+
+
+def _rgba_amber():
+    return (255, int(0.74 * 255), int(0.40 * 255), 255)
+
+
 def draw_cockpit_back(cel, tod="predawn", drawing=0, cx=960, cy=560, r=380, light=None):
-    """The inside of the teacup seen through the window: the curved inner wall in shadow,
-    two pinned paw drawings, a tiny dial with a warm glow, a strap. light 0..1 warms it
-    (match, fuse or fire)."""
+    """The inside of the teacup seen through the window: a warm, dim cockpit. The wall is
+    lined with pasted paper above and scrap wood below, a small lantern hangs from the
+    roof and the dial glows, both real amber light sources (their light is painted soft
+    over the cel fills). Two pinned paw drawings, a strap. light 0..1 warms it more."""
     q = _Close(cel, tod, drawing, r, light)
-    wall = q.shd(R["cup"], 0.70)
-    q.c.fill(core.ellipse(cx, cy, r * 1.1, r * 1.1, 90), wall)
-    # where the window light lands on the far wall: one lighter flat shape
-    q.fill(core.ellipse(cx - q.sg * r * 0.30, cy + r * 0.12, r * 0.78, r * 0.66, 60, rot=-0.25 * q.sg),
-           q.shd(R["cup"], 0.88), amp=5.0)
-    q.c.fill(core.ellipse(cx - q.sg * r * 0.36, cy + r * 0.2, r * 0.50, r * 0.40, 50, rot=-0.25 * q.sg),
-             q.shd(R["cup"], 1.0))
-    # the wall curves: two faint ring lines and the deep shadow of the far side
-    faint = palette.mix(wall, q.ink, 0.35)
-    for yy, sag in ((-0.66, 0.10), (0.78, -0.08)):
-        xs = np.linspace(-1.05, 1.05, 24)
-        q.line(np.c_[cx + xs * r, cy + (yy + sag * xs ** 2) * r], 0.45, faint, taper=(0.0, 0.0), amp=1.5)
-    deep = _sector(cx, cy, r * 0.80, r * 1.1, (-0.5 if q.sun_r else 2.6) - 0.0, (1.1 if q.sun_r else 4.2), 40)
-    q.c.fill(q.wob(deep, 4.0), q.shd(R["cup"], 0.56))
+    T = dict(q.T)
+    T["amb"] = AMBER * 0.66                    # everything in here is lit by the lamp, not the sky
+    T["key"] = AMBER * 1.05
+    T["rim"] = np.array([1.0, 0.86, 0.56], np.float32)
+    q.T = T
+    rg = core.rng("cockpit lining")
+    paper, wood = R["paper"], np.array([0.66, 0.46, 0.28], np.float32)
+    q.c.fill(core.ellipse(cx, cy, r * 1.1, r * 1.1, 90), q.shd(paper, 0.80))
+    # pasted paper: overlapping sheets, each its own value, a torn corner here and there
+    for i in range(7):
+        px, py = cx + (-1.05 + i * 0.36 + rg.normal(0, 0.05)) * r, cy + (-0.62 + rg.normal(0, 0.10)) * r
+        w, h, a = r * rg.uniform(0.40, 0.58), r * rg.uniform(0.55, 0.78), rg.normal(0, 0.07)
+        c, sn = math.cos(a), math.sin(a)
+        quad = np.array([(-1, -1), (1, -0.95), (0.97, 1), (-0.6, 1.02), (-1.02, 0.7)]) * (w * 0.5, h * 0.5)
+        quad = np.c_[px + quad[:, 0] * c - quad[:, 1] * sn, py + quad[:, 0] * sn + quad[:, 1] * c]
+        q.fill(quad, q.shd(paper * rg.uniform(0.84, 1.06), 0.92), ink=0.28, amp=1.6)
+        if i % 2 == 0:
+            tp = np.array([(-0.5, -1.06), (0.1, -1.1), (0.14, -0.86), (-0.46, -0.82)]) * (w * 0.5, h * 0.5)
+            q.c.fill(np.c_[px + tp[:, 0] * c - tp[:, 1] * sn, py + tp[:, 0] * sn + tp[:, 1] * c], q.shd(R["tape"], 1.0))
+    # scrap wood: boards of different widths and heights, grain and a nail each
+    x = cx - 1.12 * r
+    j = 0
+    while x < cx + 1.12 * r:
+        w = r * rg.uniform(0.16, 0.30)
+        top = cy + r * (0.20 + rg.uniform(-0.07, 0.08))
+        col = q.shd(wood * rg.uniform(0.78, 1.14), 0.95)
+        board = np.array([(x, top + rg.normal(0, 4) * q.k), (x + w, top + rg.normal(0, 4) * q.k), (x + w + 2, cy + 1.12 * r),
+                          (x - 1, cy + 1.12 * r)])
+        q.fill(board, col, ink=0.42, amp=1.0)
+        for gline in range(2):
+            gx = x + w * rg.uniform(0.2, 0.8)
+            q.line(np.array([(gx, top + r * 0.04), (gx + rg.normal(0, 5) * q.k, top + r * rg.uniform(0.3, 0.8))]), 0.25,
+                   col * 0.72, amp=1.5)
+        q.c.dot(x + w * 0.5, top + r * 0.045, r * 0.012, q.ink)
+        if j % 3 == 1:
+            q.c.fill(core.ellipse(x + w * 0.55, top + r * rg.uniform(0.3, 0.6), w * 0.13, w * 0.2, 12), col * 0.6)   # a knot
+        x += w
+        j += 1
     _pinned(q, cx - r * 0.60, cy - r * 0.50, r * 0.36, r * 0.44, -0.13, "rocket", 0)
     _pinned(q, cx + r * 0.58, cy - r * 0.46, r * 0.34, r * 0.34, 0.16, "map", 1)
-    # the dial and the pool of its glow on the wall
+    # the lantern: a little tin frame on a wire, its glass alight
+    lx, ly = cx - r * 0.30, cy - r * 0.80
+    tin = R["tin"]
+    q.line(np.array([(lx + r * 0.02, cy - r * 1.1), (lx, ly - r * 0.10)]), 0.4, amp=0.6)
+    q.fill(np.array([(lx - r * 0.035, ly - r * 0.10), (lx + r * 0.035, ly - r * 0.10), (lx + r * 0.07, ly - r * 0.06),
+                     (lx - r * 0.07, ly - r * 0.06)]), q.shd(tin, 0.9), ink=0.5, amp=0.4)
+    q.fill(np.array([(lx - r * 0.058, ly - r * 0.06), (lx + r * 0.058, ly - r * 0.06), (lx + r * 0.048, ly + r * 0.075),
+                     (lx - r * 0.048, ly + r * 0.075)]), np.array([1.0, 0.86, 0.52], np.float32), ink=0.5, amp=0.4)
+    q.c.fill(core.ellipse(lx, ly + r * 0.012, r * 0.022, r * 0.042, 14), np.array([1.0, 0.97, 0.82], np.float32))
+    q.fill(np.array([(lx - r * 0.065, ly + r * 0.075), (lx + r * 0.065, ly + r * 0.075), (lx + r * 0.05, ly + r * 0.105),
+                     (lx - r * 0.05, ly + r * 0.105)]), q.shd(tin, 0.8), ink=0.5, amp=0.4)
+    for sgn in (-1, 1):
+        q.line(np.array([(lx + sgn * r * 0.056, ly - r * 0.06), (lx + sgn * r * 0.047, ly + r * 0.075)]), 0.45, amp=0)
     dx, dy, dr_ = cx + r * 0.63, cy + r * 0.47, r * 0.15
-    q.fill(core.ellipse(dx, dy, dr_ * 1.9, dr_ * 1.75, 40), palette.mix(wall, np.array([0.95, 0.66, 0.38], np.float32), 0.30),
-           amp=3.0)
     _dial(q, dx, dy, dr_)
     _strap(q, [(cx - r * 1.02, cy - r * 0.08), (cx - r * 0.86, cy + r * 0.36), (cx - r * 0.62, cy + r * 0.72),
                (cx - r * 0.32, cy + r * 1.0)], r * 0.10)
+    # the light itself: bright near the two lamps, falling away into brown dark; a paper and wood grain over all
+    xx, yy = _grid(cel)
+    d_l = np.hypot(xx - lx, yy - ly)
+    d_d = np.hypot(xx - dx, yy - dy)
+    lit_ = np.clip(np.exp(-(d_l / (0.78 * r)) ** 2) + 0.75 * np.exp(-(d_d / (0.55 * r)) ** 2), 0, 1)
+    grain = core.fbm(cel.h, cel.w, 3.0, 2, seed=91) * 0.5 + core.fbm(cel.h, cel.w, 12.0 * q.k, 2, seed=92, aspect=0.2) * 0.5
+    mult = ((0.40 + 0.60 * lit_) * (0.90 + 0.10 * grain))[..., None] * np.array([1.0, 0.96, 0.90], np.float32)
+    hi = (0.30 * np.exp(-(d_l / (0.30 * r)) ** 2) + 0.20 * np.exp(-(d_d / (0.24 * r)) ** 2))[..., None] * AMBER
+    _apply_paint(cel, mult, hi, cx, cy, r * 1.1, outside=False)
 
 
 def _crazing(q, x, y, length, seed, n_branch=4):
     rg = core.rng("craze", seed)
-    col = palette.mix(q.shd(R["cup"]), q.ink, 0.42)
+    col = palette.mix(q.shd(R["cup"]), q.ink, 0.14)
     a = rg.uniform(0, 2 * math.pi)
     p = np.array([x, y], np.float64)
     trunk = [p.copy()]
@@ -909,6 +1063,32 @@ def _crazing(q, x, y, length, seed, n_branch=4):
         q.c.stroke(np.array(br), q.lw * 0.22, col, taper=(0.0, 0.7))
 
 
+def _motifs(q, cx, cy, r, xs, lo):
+    """Cobalt painted on by hand, as on real porcelain: a wavy line under the band and a few
+    leaf sprigs, uneven, laid in before the glaze pass so they take its brush and its light."""
+    cup, band = q.lit(R["cup"]), q.lit(R["cup_band"])
+    cob, cob2 = palette.mix(cup, band, 0.80), palette.mix(cup, band, 0.52)
+    rg = core.rng("cobalt motifs")
+    for seg in (xs < cx - 1.34 * r, xs > cx + 1.34 * r):
+        if seg.sum() > 3:
+            x = xs[seg]
+            y = lo[seg] + 0.13 * r + 0.035 * r * np.sin(x / (0.13 * r))
+            pr_ = 0.55 + 0.45 * np.abs(np.sin(x / (0.26 * r) + 0.6))
+            q.c.stroke(q.wob(np.c_[x, y], 2.0), 0.036 * r, cob, taper=(0.06, 0.1), pressure=pr_, seed=5)
+            q.c.stroke(np.c_[x, y + 0.08 * r + 0.02 * r * np.sin(x / (0.13 * r) + 1.0)], 0.013 * r, cob2, taper=(0.1, 0.1), seed=6)
+    for (ax, ay, sz, rot) in ((-1.78, 0.92, 0.17, 0.5), (2.02, 0.84, 0.15, -0.7), (-2.20, -0.26, 0.13, 1.9), (1.62, 1.32, 0.12, 0.2)):
+        px, py = cx + ax * r, cy + ay * r
+        n_leaf = 3 + int(rg.integers(0, 2))
+        for j in range(n_leaf):
+            a = rot + (j - (n_leaf - 1) / 2) * 0.75 + rg.normal(0, 0.12)
+            ln = sz * r * rg.uniform(0.75, 1.1)
+            leaf = np.array([(0, 0), (0.35, 0.22), (0.75, 0.16), (1, 0), (0.75, -0.16), (0.35, -0.2)]) * (ln, ln * rg.uniform(0.8, 1.2))
+            q.c.fill(q.wob(core.xform(core.catmull(leaf, n=4), rot=a, tx=px, ty=py), 1.5), cob if j % 2 == 0 else cob2)
+        q.c.dot(px, py, 0.016 * r, cob)
+        stem = core.xform(np.array([(0.0, 0.0), (-0.5, 0.08), (-0.9, -0.05)]) * sz * r, rot=rot, tx=px, ty=py)
+        q.c.stroke(stem, 0.015 * r, cob, taper=(0.0, 0.6))
+
+
 def _wall_outside(q, cel, cx, cy, r):
     """The porcelain outside wall around the hole: blue band, drips, crazing, a chip."""
     cup, band = R["cup"], R["cup_band"]
@@ -921,12 +1101,13 @@ def _wall_outside(q, cel, cx, cy, r):
     xb = cx - q.sg * (r * 1.52 + r * 0.16 * np.cos((ys - cy) / r * 0.9))
     edge = np.c_[xb, ys]
     far = x0 if q.sun_r else x1
-    q.c.fill(np.vstack([q.wob(edge, 5.0, 0.004), [(far, y1), (far, y0)]]), q.shd(cup))
+    del edge, far                              # the falloff to the shadow side is painted soft (_paint_wall)
     # the blue band: an arch across the top, cut where the window rises into it
     xs = np.linspace(x0, x1, 120)
     sag = 0.03 * r * ((xs - cx) / r) ** 2
-    up = cy - 1.44 * r + sag
-    lo = cy - 0.80 * r + sag
+    # a hand painted band: its edges wander
+    up = cy - 1.44 * r + sag + (core.fbm_at(xs, np.zeros_like(xs), 130.0 * q.k, 3, 81) - 0.5) * 0.05 * r
+    lo = cy - 0.80 * r + sag + (core.fbm_at(xs, np.zeros_like(xs) + 40.0, 110.0 * q.k, 3, 82) - 0.5) * 0.06 * r
     inside = np.abs(xs - cx) < hole_r
     circ = cy - np.sqrt(np.maximum(hole_r ** 2 - (xs - cx) ** 2, 0.0))
     lo2 = np.where(inside, np.minimum(lo, circ), lo)
@@ -935,30 +1116,31 @@ def _wall_outside(q, cel, cx, cy, r):
     xbb = cx - q.sg * r * 1.60
     sel = xs < xbb if q.sun_r else xs > xbb
     if sel.sum() > 2:
-        q.c.fill(np.vstack([np.c_[xs[sel], up[sel]], np.c_[xs[sel], lo2[sel]][::-1]]), q.shd(band))
+        pass
     # paint drips under the band, each its own length
     rg = core.rng("cupdrips")
-    for i in range(11):
+    for i in range(0):                      # the drips read as cracks: gone
         x = x0 + (i + rg.uniform(0.15, 0.85)) * (x1 - x0) / 11
         if abs(x - cx) < r * 1.36:
             continue
         yb = cy - 0.80 * r + 0.03 * r * ((x - cx) / r) ** 2 - 3
         ln = rg.uniform(0.06, 0.30) * r
         wd = rg.uniform(0.030, 0.052) * r
-        col = q.shd(band) if ((x < xbb) == q.sun_r) else q.lit(band)
+        col = q.lit(band)
         q.c.stroke(np.array([(x, yb - 4), (x + rg.normal(0, 2), yb + ln)]), wd, col, taper=(0.0, 0.25), min_w=0.5)
         q.c.dot(x, yb + ln, wd * 0.62, col)
+    _motifs(q, cx, cy, r, xs, lo)
+    _paint_wall(q, cel, cx, cy, r, hole_r)
     q.line(np.c_[xs, up], 0.5, amp=1.2, taper=(0, 0))
     for seg in (xs < cx - hole_r * 0.72, xs > cx + hole_r * 0.72):
         if seg.sum() > 2:
             q.line(np.c_[xs[seg], lo[seg]], 0.5, amp=1.2, taper=(0.0, 0.0))
     # hairline crazing and a chip
-    for i, (ax, ay, ln) in enumerate(((1.62, 0.62, 0.55), (-1.86, -0.30, 0.5), (-0.7, 1.36, 0.42), (2.05, -0.55, 0.4),
-                                      (-1.55, 0.95, 0.36))):
+    for i, (ax, ay, ln) in enumerate(((2.3, 0.40, 0.30),)):
         _crazing(q, cx + ax * r, cy + ay * r, ln * r, i)
     # the glaze: one long shine on the sun side and a short one under it
     gl = np.clip(palette.mix(q.lit(cup), q.rimc(cup), 0.55), 0, 1)
-    for (ax, y_a, y_b, wd) in ((1.98, -0.62, 0.50, 0.050), (1.93, 0.62, 0.86, 0.036)):
+    for (ax, y_a, y_b, wd) in ((1.93, 0.66, 0.84, 0.026),):
         ysg = np.linspace(cy + y_a * r, cy + y_b * r, 14)
         xsg = cx + q.sg * (ax * r + 0.10 * r * ((ysg - cy) / r) ** 2)
         poly, _, _ = _ribbon(np.c_[xsg, ysg], 0.004 * r, wd * r, n=3)
@@ -976,8 +1158,8 @@ def _brass_rim(q, cx, cy, r, inside=False):
     brass = R["copper"] * 0.55 + R["star"] * 0.45
     r1 = r * (1.16 if inside else 1.25)
     sa = math.atan2(q.T["sun"][1], q.T["sun"][0])            # angle toward the sun
-    if not inside:
-        # shadow the rim casts on the wall, away from the sun
+    if False:
+        # (the contact shadow of the rim is painted soft by _paint_wall)
         q.c.fill(_ring_poly(cx, cy, r * 1.02, r1 * 1.0, ox=-math.cos(sa) * r * 0.075, oy=-math.sin(sa) * r * 0.075 + r * 0.02),
                  q.shd(R["cup"], 0.92))
     q.c.fill(_ring_poly(cx, cy, r, r1), q.lit(brass) if not inside else q.shd(brass, 1.15))
@@ -1047,7 +1229,7 @@ def _glass(q, cx, cy, r, reflect=0.0, fog=0.0, strength=1.0):
     sky = palette.sky_color(q.T, 0.62)
     col = np.clip(palette.mix(sky, (1.0, 1.0, 1.0), 0.45), 0, 1)
     sh = (reflect % 1.0) * 1.9 if reflect else 0.0
-    for lo, hi, al in ((-0.70, -0.40, 0.30), (-0.30, -0.21, 0.20)):
+    for lo, hi, al in ((-0.70, -0.40, 0.17), (-0.30, -0.21, 0.11)):
         lo2, hi2 = lo + sh, hi + sh
         if lo2 > 0.97:
             lo2, hi2 = lo2 - 1.95, hi2 - 1.95
@@ -1064,7 +1246,7 @@ def _glass(q, cx, cy, r, reflect=0.0, fog=0.0, strength=1.0):
             q.c.fill(q.wob(poly, 1.5), col, alpha=al * strength)
     # the thin bright crescent where the glass meets the rim, on the sky side
     sa = math.atan2(q.T["sun"][1], q.T["sun"][0])
-    q.c.fill(_sector(cx, cy, rr * 0.955, rr, sa - 2.6, sa - 1.5, 30), col, alpha=0.42 * strength)
+    q.c.fill(_sector(cx, cy, rr * 0.955, rr, sa - 2.6, sa - 1.5, 30), col, alpha=0.24 * strength)
     if fog > 0.01:
         fx_, fy_ = cx + r * 0.06, cy + r * 0.44
         q.c.fill(q.wob(core.ellipse(fx_, fy_, r * 0.46 * (0.6 + 0.4 * fog), r * 0.33 * (0.6 + 0.4 * fog), 40), 9.0, 0.006),
@@ -1081,45 +1263,103 @@ def draw_cockpit_front(cel, tod="predawn", drawing=0, cx=960, cy=560, r=380, ref
     _wall_outside(q, cel, cx, cy, r)
     _hinge(q, cx, cy, r, -1.0 if q.sun_r else 1.0)
     _brass_rim(q, cx, cy, r)
+    _amber(q, cel, cx, cy, r)
     _glass(q, cx, cy, r, reflect, fog)
     return dict(window=(cx, cy, r))
 
 
+def _lantern(q, lx, ly, r, wire_to):
+    tin = R["tin"]
+    q.line(np.array([(lx + r * 0.02, wire_to), (lx, ly - r * 0.10)]), 0.4, amp=0.6)
+    q.fill(np.array([(lx - r * 0.035, ly - r * 0.10), (lx + r * 0.035, ly - r * 0.10), (lx + r * 0.07, ly - r * 0.06),
+                     (lx - r * 0.07, ly - r * 0.06)]), q.shd(tin, 0.9), ink=0.5, amp=0.4)
+    q.fill(np.array([(lx - r * 0.058, ly - r * 0.06), (lx + r * 0.058, ly - r * 0.06), (lx + r * 0.048, ly + r * 0.075),
+                     (lx - r * 0.048, ly + r * 0.075)]), np.array([1.0, 0.86, 0.52], np.float32), ink=0.5, amp=0.4)
+    q.c.fill(core.ellipse(lx, ly + r * 0.012, r * 0.022, r * 0.042, 14), np.array([1.0, 0.97, 0.82], np.float32))
+    q.fill(np.array([(lx - r * 0.065, ly + r * 0.075), (lx + r * 0.065, ly + r * 0.075), (lx + r * 0.05, ly + r * 0.105),
+                     (lx - r * 0.05, ly + r * 0.105)]), q.shd(tin, 0.8), ink=0.5, amp=0.4)
+    for sgn in (-1, 1):
+        q.line(np.array([(lx + sgn * r * 0.056, ly - r * 0.06), (lx + sgn * r * 0.047, ly + r * 0.075)]), 0.45, amp=0)
+
+
 def draw_cockpit_inside(cel, tod="sunrise", drawing=0, window=(1240, 430, 250), light=0.0, reflect=0.0):
-    """Camera inside the teacup (s7b): the inner wall fills the frame with a round hole
-    where the sky shows (left transparent), the window frame from inside with its nuts
-    and hinge, pinned drawings, the dial, a strap. light 0..1 floods the wall with the
-    colour of the key light. Draw the sky first, this layer, then the panda in front."""
+    """Camera inside the teacup (s7b): the lined inner wall fills the frame (pasted paper above,
+    scrap wood below, the same cockpit as the view through the window), lit by its lantern and
+    curving away into dark at the sides, with a round hole where the sky shows (left transparent),
+    the window frame from inside, pinned drawings, the dial, a strap. light 0..1 is the gold of the
+    sunrise flooding in round the opening. Draw the sky first, this layer, then the panda in front."""
     wx, wy, r = window
     q = _Close(cel, tod, drawing, r, 0.0)
-    cup = R["cup"]
+    T_out = q.T
     flood = float(light)
-    wall = palette.mix(q.shd(cup, 0.74), np.clip(palette.lit(cup, q.T) * 0.92, 0, 1), 0.55 * flood)
-    wall_dk = palette.mix(q.shd(cup, 0.54), q.shd(cup, 0.9), 0.6 * flood)
-    wall_hi = palette.mix(q.shd(cup, 0.92), np.clip(palette.lit(cup, q.T), 0, 1), 0.3 + 0.7 * flood)
-    q.c.fill(_holed_frame(cel, wx, wy, r * 1.03), wall)
+    Ta = dict(T_out)
+    Ta["amb"], Ta["key"], Ta["rim"] = AMBER * 0.66, AMBER * 1.05, np.array([1.0, 0.86, 0.56], np.float32)
+    q.T = Ta
+    paper, wood = R["paper"], np.array([0.66, 0.46, 0.28], np.float32)
+    rg = core.rng("cockpit lining inside")
     x0, x1 = cel.x0 - 60.0, cel.x0 + cel.w + 60.0
     y0, y1 = cel.y0 - 60.0, cel.y0 + cel.h + 60.0
-    # the wall curving toward us on both sides falls into a deeper tone
-    ys = np.linspace(y0, y1, 18)
-    for sgn in (-1.0, 1.0):
-        xb = wx + sgn * (r * 2.3 + r * 0.25 * np.cos((ys - wy) / r * 0.7)) - r * 0.5
-        far = x0 if sgn < 0 else x1
-        q.c.fill(np.vstack([q.wob(np.c_[xb, ys], 6.0, 0.004), [(far, y1), (far, y0)]]), wall_dk)
-    # light spilling round the opening: a lighter halo of wall, wider when the gold floods in
-    q.c.fill(q.wob(_ring_poly(wx, wy, r * 1.1, r * (1.36 + 0.34 * flood), n=90), 7.0, 0.005), wall_hi)
-    faint = palette.mix(wall, q.ink, 0.30)
-    for yy, sag in ((-1.72, 0.05), (1.86, -0.04)):
-        xs = np.linspace(x0, x1, 40)
-        q.line(np.c_[xs, wy + (yy + sag * ((xs - wx) / r) ** 2) * r], 0.4, faint, taper=(0.0, 0.0), amp=2.0)
-    for i, (ax, ay, ln) in enumerate(((-1.8, 0.9, 0.5), (1.5, 1.5, 0.45), (-2.6, -0.9, 0.4))):
-        _crazing(q, wx + ax * r, wy + ay * r, ln * r, 20 + i)
+    q.c.fill(_holed_frame(cel, wx, wy, r * 1.03), q.shd(paper, 0.80))
+    keep = r * 1.22
+    for row, yc in enumerate((wy - 1.25 * r, wy - 0.30 * r, wy + 0.65 * r)):
+        for i in range(int((x1 - x0) / (r * 0.62)) + 2):
+            px = x0 + (i + rg.normal(0, 0.08)) * r * 0.62 + (row % 2) * r * 0.3
+            py = yc + rg.normal(0, 0.10) * r
+            w, h, a = r * rg.uniform(0.62, 0.86), r * rg.uniform(0.82, 1.08), rg.normal(0, 0.07)
+            tone = rg.uniform(0.84, 1.06)
+            if math.hypot(px - wx, py - wy) < keep + 0.5 * math.hypot(w, h):
+                continue
+            c, sn = math.cos(a), math.sin(a)
+            quad = np.array([(-1, -1), (1, -0.95), (0.97, 1), (-0.6, 1.02), (-1.02, 0.7)]) * (w * 0.5, h * 0.5)
+            quad = np.c_[px + quad[:, 0] * c - quad[:, 1] * sn, py + quad[:, 0] * sn + quad[:, 1] * c]
+            q.fill(quad, q.shd(paper * tone, 0.92), ink=0.25, amp=1.6)
+            if i % 2 == 0:
+                tp = np.array([(-0.5, -1.06), (0.1, -1.1), (0.14, -0.9), (-0.46, -0.86)]) * (w * 0.5, h * 0.5)
+                q.c.fill(np.c_[px + tp[:, 0] * c - tp[:, 1] * sn, py + tp[:, 0] * sn + tp[:, 1] * c], q.shd(R["tape"], 1.0))
+    x = x0
+    j = 0
+    while x < x1:
+        w = r * rg.uniform(0.26, 0.48)
+        top = wy + r * (1.58 + rg.uniform(-0.10, 0.10))
+        col = q.shd(wood * rg.uniform(0.78, 1.14), 0.95)
+        q.fill(np.array([(x, top + rg.normal(0, 4) * q.k), (x + w, top + rg.normal(0, 4) * q.k), (x + w + 2, y1), (x - 1, y1)]),
+               col, ink=0.42, amp=1.0)
+        for gline in range(2):
+            gx = x + w * rg.uniform(0.2, 0.8)
+            q.line(np.array([(gx, top + r * 0.06), (gx + rg.normal(0, 5) * q.k, top + r * rg.uniform(0.4, 1.0))]), 0.25,
+                   col * 0.72, amp=1.5)
+        q.c.dot(x + w * 0.5, top + r * 0.07, r * 0.018, q.ink)
+        if j % 3 == 1:
+            q.c.fill(core.ellipse(x + w * 0.55, top + r * rg.uniform(0.4, 0.8), w * 0.13, w * 0.2, 12), col * 0.6)
+        x += w
+        j += 1
     _pinned(q, wx - r * 2.05, wy - r * 0.30, r * 0.62, r * 0.76, -0.10, "rocket", 0)
     _pinned(q, wx - r * 2.75, wy + r * 0.62, r * 0.56, r * 0.56, 0.14, "map", 1)
+    lx, ly = wx - r * 1.38, wy - r * 1.02
+    _lantern(q, lx, ly, r * 1.5, y0)
     dx, dy, dr_ = wx + r * 1.65, wy + r * 1.30, r * 0.26
-    q.fill(core.ellipse(dx, dy, dr_ * 1.8, dr_ * 1.7, 40), palette.mix(wall, np.array([0.95, 0.66, 0.38], np.float32), 0.28), amp=3.0)
     _dial(q, dx, dy, dr_)
     _strap(q, [(wx + r * 1.7, y0), (wx + r * 1.95, wy - r * 0.6), (wx + r * 2.3, wy + r * 0.2), (x1 + 20, wy + r * 0.55)], r * 0.17)
+    # the light: the lantern, the dial and what spills in round the opening; the wall curves away
+    # into brown dark at the sides and toward the floor
+    xx, yy = _grid(cel)
+    dist = np.hypot(xx - wx, yy - wy)
+    d_l = np.hypot(xx - lx, yy - ly)
+    d_d = np.hypot(xx - dx, yy - dy)
+    lit_ = np.clip(0.95 * np.exp(-(d_l / (1.7 * r)) ** 2) + 0.5 * np.exp(-(d_d / (0.8 * r)) ** 2)
+                   + (0.22 + 0.78 * flood) * np.exp(-((dist - 1.1 * r) / (1.5 * r)) ** 2), 0, 1)
+    half = 0.5 * cel.w
+    c = (xx - (cel.x0 + half)) / (1.10 * half)
+    lam = np.sqrt(np.clip(1 - c * c, 0, 1))
+    vb = np.clip((yy - (wy + 0.9 * r)) / (2.2 * r), 0, 1)
+    grain = core.fbm(cel.h, cel.w, 3.0, 2, seed=93) * 0.5 + core.fbm(cel.h, cel.w, 12.0 * q.k, 2, seed=94, aspect=0.2) * 0.5
+    val = (0.34 + 0.62 * lit_) * (0.42 + 0.58 * lam ** 1.3) * (1 - 0.35 * vb * vb) * (0.90 + 0.10 * grain)
+    mult = val[..., None] * np.array([1.0, 0.96, 0.90], np.float32)
+    keyc = np.clip(np.asarray(T_out["key"], np.float32), 0, 1)
+    hi = (0.28 * np.exp(-(d_l / (0.5 * r)) ** 2) + 0.16 * np.exp(-(d_d / (0.4 * r)) ** 2))[..., None] * AMBER \
+        + ((0.06 + 0.34 * flood) * np.exp(-((dist - 1.25 * r) / (0.42 * r)) ** 2))[..., None] * keyc
+    _apply_paint(cel, mult, hi, wx, wy, r * 1.03, outside=True)
+    q.T = T_out
     _hinge(q, wx, wy, r * 0.93, 1.0 if q.sun_r else -1.0)
     _brass_rim(q, wx, wy, r, inside=True)
     _glass(q, wx, wy, r, reflect, 0.0, strength=0.6)

@@ -156,7 +156,7 @@ def radius(arr, t):
 
 
 @njit(cache=True, fastmath=True)
-def _lobes(xs, ys, rs, zs, wx, wy, hgt, nx, ny, nz, sd):
+def _lobes(xs, ys, rs, zs, wx, wy, hgt, nx, ny, nz, sd, tvs, tv):
     hh, ww = hgt.shape
     for k in range(xs.shape[0]):
         r = rs[k]
@@ -184,6 +184,7 @@ def _lobes(xs, ys, rs, zs, wx, wy, hgt, nx, ny, nz, sd):
                         nx[j, i] = dx / r
                         ny[j, i] = dy / r
                         nz[j, i] = hz / r
+                        tv[j, i] = tvs[k]
 
 
 TONES = dict(
@@ -194,7 +195,7 @@ TONES = dict(
 
 
 def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H, W), haze=0.26,
-           warm_top=0.12, soft=3.0, grow=1.0):
+           warm_top=0.12, soft=3.0, grow=1.0, dark=None):
     T = palette.TOD[tod] if isinstance(tod, str) else tod
     hh, ww = hw
     s, tx, ty = xf
@@ -209,6 +210,7 @@ def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H
     if not vis.any():
         return out_empty
     xs, ys, r, zs = xs[vis], ys[vis], r[vis], arr[vis, Z]
+    tvs = np.ascontiguousarray(arr[vis, RND])
     # the hand in the outline: a warp field anchored to the SET, so lobes glide through it
     # (no boil); it only drifts slowly in time
     z = f * 0.012
@@ -222,7 +224,8 @@ def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H
     ny = np.zeros((hh, ww), np.float32)
     nz = np.ones((hh, ww), np.float32)
     sd = np.full((hh, ww), -1e3, np.float32)
-    _lobes(xs, ys, r, zs, wx, wy, hgt, nx, ny, nz, sd)
+    tv = np.full((hh, ww), 0.5, np.float32)
+    _lobes(xs, ys, r, zs, wx, wy, hgt, nx, ny, nz, sd, tvs, tv)
     # silhouette: a soft falloff of a few px, and wispy translucent bites out of the edge
     alpha = np.clip(sd / max(soft * k, 0.8) + 0.5, 0, 1)
     edge = np.clip(1 - sd / (13.0 * k), 0, 1)
@@ -233,7 +236,13 @@ def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H
     L = np.array([sx * 0.55, sy * 0.3 - 0.78, 0.40])
     L /= np.linalg.norm(L)
     lv = nx * L[0] + ny * L[1] + nz * L[2] + jit
-    a_top = np.clip((lv - 0.72) * 60.0 + 0.5, 0, 1)
+    # every lobe turns the light a little and sets its own threshold: no two highlights are
+    # the same oval (some are crescents, some broad caps, some lobes get none)
+    ang = (tv - 0.5) * 1.4
+    ca, sn = np.cos(ang), np.sin(ang)
+    tv2 = np.modf(tv * 7.31)[0]
+    lvt = nx * (L[0] * ca - L[1] * sn) + ny * (L[0] * sn + L[1] * ca) + nz * L[2] + jit * 1.8
+    a_top = np.clip((lvt - (0.64 + (tv2 - 0.5) * 0.34)) * 60.0 + 0.5, 0, 1)
     a_deep = np.clip((0.06 - lv) * 60.0 + 0.5, 0, 1)
     S = TONES
     c_top = np.clip(palette.mix(palette.lit(S["light"], T), T["sky"][-1][1], warm_top) * 1.07, 0, 1)
@@ -243,20 +252,40 @@ def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H
     rgb[:] = c_body
     rgb += (c_top - rgb) * a_top[..., None]
     rgb += (c_deep - rgb) * a_deep[..., None]
+    if dark is not None:
+        # depth: the mass goes from pale at its lit top to near black violet at the front bottom
+        y0, y1, amt = dark
+        dk = np.clip((np.arange(hh, dtype=np.float32)[:, None] - y0) / max(y1 - y0, 1.0), 0, 1)
+        dk = dk * dk * (3 - 2 * dk) * amt * (0.80 + 0.20 * a_deep + 0.9 * jit)
+        dcol = np.array([0.085, 0.07, 0.17], np.float32) * (0.6 + 0.9 * T["amb"])
+        rgb += (dcol - rgb) * np.clip(dk, 0, 1)[..., None]
     if fire is not None and fire[2] > 0.01:
+        # the fire lights the smoke from inside. The light is read off a SMOOTHED surface, so it
+        # falls in a few broad faces on the undersides and inner sides near the flame (never one
+        # flake per small lobe), orange near, rose farther out, then nothing: the tops stay cool.
         fxs, fys, amt, reach = fire
         yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float32)
         dx_, dy_ = fxs - xx, fys - yy
         dist = np.maximum(np.hypot(dx_, dy_), 1.0)
-        fl = (nx * dx_ + ny * dy_) / dist * 0.93 + nz * 0.30
-        fall = np.clip(1.22 - dist / reach, 0, 1)
-        near = np.clip(1 - dist / (reach * 0.56), 0, 1)
-        val = (np.clip(fl, -0.2, 1) * 0.85 * fall + 0.50 * near) * amt + jit * 0.5
-        a_or = np.clip((val - 0.24) * 60.0 + 0.5, 0, 1)
-        a_go = np.clip((val - 0.66) * 60.0 + 0.5, 0, 1)
+        am = (sd > 0).astype(np.float32)
+        sg_ = 20.0 * k
+        w_ = np.maximum(core.gblur(am, sg_), 1e-3)
+        nxs = core.gblur(nx * am, sg_) / w_
+        nys = core.gblur(ny * am, sg_) / w_
+        fl = np.clip((nxs * dx_ + nys * dy_) / dist * 2.2 + 0.5 * np.clip(nys, 0, 1), 0, 1)
+        fall = np.clip(1.12 - dist / reach, 0, 1)
+        prox = np.clip(1 - dist / (reach * 0.52), 0, 1)
+        up = np.clip(1.0 + 1.7 * np.minimum(nys, 0.0), 0.12, 1.0)          # broad faces that look up stay cool
+        gain = 0.55 + 0.9 * core.gblur(tv * am, sg_) / w_                  # lobe by lobe, so the edge of the light is never a circle
+        val = (0.70 * fl * fall + 0.80 * prox) * up * (1 - 0.85 * a_top) * gain * amt + jit * 0.35
+        rose = np.array([0.74, 0.44, 0.56], np.float32)
+        a_ro = np.clip((val - 0.17) * 60.0 + 0.5, 0, 1)
+        a_or = np.clip((val - 0.25) * 60.0 + 0.5, 0, 1)
+        a_go = np.clip((val - 0.55) * 60.0 + 0.5, 0, 1)
+        rgb += (rose - rgb) * a_ro[..., None]
         rgb += (S["hot_mid"] - rgb) * a_or[..., None]
         rgb += (S["hot_hi"] - rgb) * a_go[..., None]
-        hz_col = palette.mix(c_body, S["hot_mid"], np.clip(near * amt, 0, 1)[..., None] * 0.7)
+        hz_col = palette.mix(c_body, S["hot_mid"], np.clip((1 - dist / (reach * 0.56)) * amt, 0, 1)[..., None] * 0.7)
     else:
         hz_col = c_body
     rgb = core.gblur(rgb, 0.55)
@@ -270,11 +299,11 @@ def render(arr, t, f, tod="launch", xf=(1.0, 0.0, 0.0), fire=None, seed=0, hw=(H
     return dict(layer=layer, alpha=alpha)
 
 
-FLAME = dict(orange=np.array([1.00, 0.50, 0.12], np.float32), yellow=np.array([1.00, 0.84, 0.32], np.float32),
+FLAME = dict(red=np.array([0.80, 0.17, 0.07], np.float32), orange=np.array([1.00, 0.50, 0.12], np.float32), yellow=np.array([1.00, 0.84, 0.32], np.float32),
              white=np.array([1.00, 0.985, 0.88], np.float32))
 
 
-def flame(f, xf=(1.0, 0.0, 0.0), F=None, grid=None, jet=None, seed=0, hw=(H, W), amount=1.0):
+def flame(f, xf=(1.0, 0.0, 0.0), F=None, grid=None, jet=None, seed=0, hw=(H, W), amount=1.0, focus=None):
     """The fire in three flat tones (white core, yellow, orange tongue), on ones.
     F, grid=(origin_x, origin_y, cell): the simulated flame field in set px (the splash on the ground).
     jet=(x0, y0, x1, y1, w0, w1, foot): the tongue from the nozzle in SCREEN px; foot 1 gives the
@@ -296,6 +325,9 @@ def flame(f, xf=(1.0, 0.0, 0.0), F=None, grid=None, jet=None, seed=0, hw=(H, W),
         g2 = ndimage.zoom(F.astype(np.float32), 2, order=3, mode="nearest", grid_mode=True)
         fx._sample(np.ascontiguousarray(g2, np.float32), Fs, 2.0 / sc, ox * s + tx + 0.25 * sc, oy * s + ty + 0.25 * sc, wx, wy)
         Fs = np.clip(Fs, 0, 1.5)
+        if focus is not None:                       # (x, y, radius) in screen px: no loose flakes far from the fire
+            yy_, xx_ = np.mgrid[0:hh, 0:ww].astype(np.float32)
+            Fs *= np.exp(-(((xx_ - focus[0]) / focus[2]) ** 2 + ((yy_ - focus[1]) / (focus[2] * 0.6)) ** 2))
     jf = None
     if jet is not None:
         x0, y0, x1, y1, w0, w1, foot = jet
@@ -316,14 +348,16 @@ def flame(f, xf=(1.0, 0.0, 0.0), F=None, grid=None, jet=None, seed=0, hw=(H, W),
         jf *= (0.55 + 0.45 * (1 - u * (1 - foot)))
         Fs = np.maximum(Fs, jf)
     Fw = core.gblur(Fs, 1.2 * k) * (0.62 + 0.8 * n_fine) * amount
-    a_or = fx._hard(Fw, 0.20)
-    a_ye = fx._hard(Fw, 0.42)
-    a_wh = fx._hard(Fw, 0.74)
+    a_rd = fx._hard(Fw, 0.10)
+    a_or = fx._hard(Fw, 0.21)
+    a_ye = fx._hard(Fw, 0.40)
+    a_wh = fx._hard(Fw, 0.70)
     rgb = np.empty((hh, ww, 3), np.float32)
-    rgb[:] = FLAME["orange"]
-    rgb += (FLAME["yellow"] - FLAME["orange"]) * a_ye[..., None]
+    rgb[:] = FLAME["red"]
+    rgb += (FLAME["orange"] - rgb) * a_or[..., None]
+    rgb += (FLAME["yellow"] - rgb) * a_ye[..., None]
     rgb += (FLAME["white"] - rgb) * a_wh[..., None]
-    lay = core.premul(rgb, a_or.astype(np.float32))
+    lay = core.premul(rgb, a_rd.astype(np.float32))
     out = dict(flame=lay, field=Fs)
     if jf is not None:
         out["jet"] = lay * np.clip(jf * 6.0, 0, 1)[..., None]

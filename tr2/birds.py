@@ -73,21 +73,25 @@ def draw_bird(cel, x, y, size, vx, vy, ph, glide, col_body, col_wing, col_light=
     # down stroke is broad, up stroke is folded and swept back
     broad = (0.55 + 0.45 * max(s, 0.0)) * (1 - glide) + 0.95 * glide
     h = (lift * 2 - 1) * 0.95                    # wing tip height
-    span = 1.05 * broad + 0.25
-    sweep = -0.25 - 0.35 * (1 - broad)
+    span = 1.35 * broad + 0.45                   # long wings: the V and M shapes are what read as "bird"
+    sweep = -0.22 - 0.40 * (1 - broad)
+
+    def wing(k, dz):
+        """A long pointed wing with a bend at the wrist. k scales it (the far wing is smaller)."""
+        tip = (-0.10 + sweep * 1.2, h * span * 1.15 * k + dz)
+        wrist = (0.10 + sweep * 0.35, h * span * 0.62 * k + dz + 0.10 * (1 - abs(h)))
+        return [P(0.22, 0.05 + dz), P(*wrist), P(*tip), P(tip[0] - 0.10, tip[1] - 0.10 * np.sign(h) if h else tip[1]),
+                P(-0.20 + sweep * 0.5, h * span * 0.40 * k + dz - 0.03), P(-0.16, 0.0 + dz)]
+
     # far wing first (smaller, darker), then body, then near wing
-    far = [P(0.18, 0.05), P(0.05 + sweep * 0.6, h * 0.8 * span + 0.10), P(-0.32 + sweep * 0.5, h * 0.55 * span),
-           P(-0.12, 0.02)]
-    cel.fill(core.catmull(far, 6), col_wing)
+    cel.fill(wing(0.82, 0.05), col_wing)
     body = [P(0.52, 0.02), P(0.30, 0.16), P(-0.05, 0.17), P(-0.42, 0.06), P(-0.78, 0.10), P(-0.80, -0.02),
             P(-0.42, -0.07), P(-0.02, -0.15), P(0.32, -0.10)]
     cel.fill(core.catmull(body, 6), col_body)
     if col_light is not None:
         belly = [P(0.40, -0.02), P(0.10, -0.01), P(-0.30, -0.03), P(-0.05, -0.14), P(0.30, -0.10)]
         cel.fill(core.catmull(belly, 5), col_light)
-    near = [P(0.24, 0.04), P(0.12 + sweep, h * span + 0.04), P(-0.18 + sweep * 1.3, h * 0.92 * span - 0.05),
-            P(-0.46 + sweep * 0.7, h * 0.50 * span - 0.04), P(-0.20, -0.02)]
-    cel.fill(core.catmull(near, 6), col_wing)
+    cel.fill(wing(1.0, 0.0), col_wing)
     cel.fill([P(0.50, 0.03), P(0.70, -0.01), P(0.50, -0.04)], col_wing)       # beak
 
 

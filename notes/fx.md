@@ -40,9 +40,18 @@ Start: Tue Nov 10 01:54 IST 2026. Checkpoint 1 due 02:40 IST.
   - Looked at 12 consecutive frames (fl 14 to 25) as one tiled still: lobes grow and drift smoothly, no popping seen. The clip itself was not watched.
 - Outputs: `build/review/sheet-s6_lift.jpg`, `build/seg/s6_lift.mp4` (half size clip).
 
+## Round 3 (06:25 to 06:33): director and manager notes on the cockpit and the ignition
+- Cockpit, outside (`draw_cockpit_front`): the porcelain is painted, not flat. `_paint_wall` multiplies and screens soft 1x fields into the cel after the fills (`_apply_paint`, PIL multiply and screen, alpha untouched, only outside the hole): round falloff to the shadow side, mottled glaze, brush and grain, brushed streaks in the band, soft contact shadow of the rim, one broad highlight. Band edges wander. The hard shadow fill, the hard rim cast shadow and the long glaze ribbon are gone. Glass reflections at about half strength. `_amber` lays a soft amber veil in the opening (strongest toward the dial and the lantern) so the cockpit light falls on the panda without any change in the callers.
+- Cockpit, back plate (`draw_cockpit_back`): a warm dim cockpit lit by its own lamps (the cut's sky light is replaced by amber inside): pasted paper sheets above, scrap wood boards below, a small tin lantern on a wire, the dial, the two pinned drawings, the strap, then a painted light falloff from the lantern and the dial.
+- Cockpit, inside (`draw_cockpit_inside`): same paint pass (soft falloff away from the window, halo round the opening); the hard side fills and hard halo are gone. No paper and wood lining here yet.
+- s6 smoke (`fx_smoke.render`): no more orange petals. Fire light is read off a smoothed surface plus nearness to the fire, cut on faces that look up and on highlights, with a gain per lobe so its edge is not a circle; tones go gold, orange, a thin rose, then nothing. New `dark=(y0, y1, amount)`: the mass falls to near black violet at the front bottom. Highlights vary per lobe (light turned and threshold shifted by the lobe's random value). Top tone is cool (warm_top 0).
+- s6 flame: four tones (white, yellow, orange, deep red edge), `focus` keeps the ground splash near the fire, the splash field is dropped once the rocket is 200 px up, stronger glow at the nozzle.
+- s6 frame: sparks fewer and finer (170, size 0.5, longer shutter), fire pool on the grass tighter, the near slope and the foreground grass darkened.
+- s6 leaves: `leaves_layer`, 14 leaves torn from the canopy from 0.3 s before `passes_tree`, each with a smear along its path, spin and flip, on ones.
+- Tests: `build/review/f0830.png` (s5c), `f0905.png` (s6), `sheet-s6_lift.jpg`. The half size clip `build/seg/s6_lift.mp4` is from before this round.
+
 ## Still weak in s6 (not done)
-- No torn leaves at ignition or as it passes the tree; the canopy only sways harder (`wind`).
-- The orange lit kids make a busy row of small orange petals along the front smoke line.
+- (fixed in round 3: torn leaves, orange petals)
 - The front smoke is the same layer drawn again below a wandering line, not a separate nearer layer.
 - My soft clouds and builder C's painted sky clouds are two different hands; mine are plainer.
 - The view blend low34 to below changes the rocket's proportions while it climbs; watch it in motion.

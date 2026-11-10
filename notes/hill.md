@@ -50,6 +50,28 @@ All layers painted in 20 s. Saw: spiky foliage, flat tan valley, purple blob sto
 Stills in build/review: hill-dusk.png, hill-dusk-crop.png, hill-night, hill-predawn, hill-launch,
 hill-morning (each with -crop), hill-launch-fire.png (fire and flatten on), hill-sway.jpg.
 
+## 05:43 to 05:56 Two cuts (director handed over s9a_home and s5b_fuse)
+- `tr2/shots/s9a_home.py`: descent under the paper umbrella (pendulum, rocket lags by 0.13 s),
+  touchdown squash, hop, settle, strings slip free, umbrella folds and drops right, dust puffs,
+  torn grass, flatten, nozzle wisps. `pose(t)` is a pure function of time, so negative fl works.
+  Exports `draw_parachute_rest(pic, cam, t, f)`; the fall ends exactly on the rest pose (REST dict).
+  One frame cost about 7.4 s alone at 2 threads (over the 6 s guide).
+- `tr2/shots/s5b_fuse.py`: macro at zoom 3.5. Spark steps hold 2 or 3 frames (`_step`), fuse pale
+  ahead and charred behind with embers, ragged star head redrawn every frame, three overlapping
+  `fx.sparks_layer` sprays, smoke thread, warm tint on blades near the spark, two blurred foreground
+  planes (p 1.7 and 2.6), rack focus 1.55 to 2.2 s (whole back picture blurred until then).
+  Not timed per frame. Not checked in motion (sheets only).
+
+## 06:25 to 06:33 Director round on s9a
+- Umbrella rescaled: LR 133 (canopy about 250 set px wide, 1.3 x the fin span), L_STR 150, HANDLE 62.
+  Rest pose: open 0.08, hub at x 1886, 5 px above the ground line, `_rest_tufts` lays grass over
+  its lower half (also used at the end of s9a).
+- Landing: squash peaks at 1.45 for two frames, hop 27 px, flatten radius 300 at amount 1.0 then
+  springing back by 0.68 s, 11 dust puffs, 20 floating seeds, camera thump, bigger umbrella wobble.
+- Opening: tilt starts at 380 (was 560) so the rocket sits high in frame during the dissolve;
+  swing amplitude raised to about 0.2 rad at the start.
+- Checked: sheet-s9a_home.jpg, f1530.png (s9b with the rest umbrella), fl -16 to 11, fl 66 to 79.
+
 ## Known weak points, next steps
 - Dusk river is pale gold and narrow through the village; could be wider and more orange.
 - A straight band of mist sits on the horizon line; break it with far tree lines or low hills.

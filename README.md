@@ -25,6 +25,17 @@ One Fable 5.2 session directed and wrote the engine. It started builder agents, 
 | The cuts | `tr2/shots/`, `tr2/timeline.py`, `tr2/film.py` | 16 cuts, one module each; one timeline drives both picture and sound |
 | Sound | `sound/` | An original score and all foley, synthesised with numpy and scipy, placed from the same cue sheet |
 
+## How long it took
+
+Measured from the machine clock, logged in [NOTES.md](NOTES.md):
+
+- Started 01:45:17 IST, final files built 11:00:09 IST on 10 November 2026.
+- Two usage limit pauses are excluded: 02:39:50 to 05:41:28 (3 h 01 min 38 s) and 08:53:10 to 10:41:13 (1 h 48 min 03 s).
+- **Working time: 4 hours 25 minutes**, from an empty folder to the finished film with sound. That includes about 70 minutes of rendering.
+- The first complete cut with sound existed after 1 hour 41 minutes of working time; the rest was two rounds of notes and polish.
+
+The film is 1,776 frames at 1920x1080, 24 fps, in 16 cuts. The soundtrack measures -14.0 LUFS integrated with a true peak of -1.3 dBTP and a loudness range of 15 LU.
+
 The production log, with real clock times for every step, is [NOTES.md](NOTES.md).
 
 ## Rebuild it
