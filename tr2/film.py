@@ -11,6 +11,7 @@ pass: tod (name or blended dict), bloom_amt, bloom_thr, vig, grain_amt, paper,
 fade=(colour, amount), finished=True (the shot already ran its own finish).
 """
 import importlib
+import os
 
 import numpy as np
 
@@ -37,7 +38,15 @@ def _shot_frame(i, f):
         ys = np.linspace(0, 1, core.H, dtype=np.float32)
         pic = np.repeat(palette.sky_color(tod, ys)[:, None, :], core.W, 1).copy()
     else:
-        res = mod.render(fl, n, f)
+        try:
+            res = mod.render(fl, n, f)
+        except Exception as e:  # noqa
+            # animatic mode (TR2_SAFE=1): a cut that is still being written shows as plain sky
+            if os.environ.get("TR2_SAFE") != "1":
+                raise
+            print("cut %s failed at frame %d: %r" % (name, f, e), flush=True)
+            ys = np.linspace(0, 1, core.H, dtype=np.float32)
+            res = np.repeat(palette.sky_color(tod, ys)[:, None, :], core.W, 1).copy()
         if isinstance(res, tuple):
             pic, opts = res
         else:

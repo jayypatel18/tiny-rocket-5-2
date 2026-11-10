@@ -169,3 +169,53 @@ def pendulum(knot, v0, tau, damp=3.0, freq=6.5, lag=0.045, stiff=0.5):
     mid = knot + stiff * L * np.array([math.sin(a1), math.cos(a1)])
     end = mid + (1 - stiff) * L * np.array([math.sin(a2), math.cos(a2)])
     return np.array([knot, mid, end])
+
+
+# ------------------------------------------------------- the cockpit close ups
+def soft_bg(name, tod, cx=1690, cy=1012, zoom=4.5, sigma=16.0):
+    """The real hilltop far out of focus, painted once and cached."""
+    def build():
+        from .shots import common
+        cam = core.Camera(cx0=1600, cy0=900, cx=cx, cy=cy, zoom=zoom)
+        pic = common.hilltop(cam, tod, 0, 0.0, defocus=lambda p: sigma, front=False, band=None)
+        return core.gblur(pic, 5.0)
+    return cached(name, build)
+
+
+def window_shot(pose, tod, drawing, r=380.0, s=4.8, cx=960.0, cy=560.0, head_at=None, light=0.0, plight=None,
+                reflect=0.0, fog=0.0, sig_face=0.0, sig_front=0.0, shake=(0.0, 0.0), ss=2):
+    """Outside the teacup looking in through the round window: the inside wall,
+    the panda (clipped to the opening), then the porcelain, brass rim and glass.
+    The head centre sits at head_at (default: the window centre). Returns (pic, anchors)."""
+    from . import panda, rocket
+    T = palette.TOD[tod] if isinstance(tod, str) else tod
+    pic = np.zeros((core.H, core.W, 3), np.float32) + np.asarray(T["amb"], np.float32) * 0.2
+    lt = float(light) if light and light > 0.01 else None
+    cel = core.Cel(ss=ss)
+    rocket.draw_cockpit_back(cel, tod, drawing, cx, cy, r, light=lt)
+    inner = cel.rgba()
+    hx, hy = (cx, cy + 0.04 * r) if head_at is None else head_at
+    cel = core.Cel(ss=ss)
+    an = panda.draw(cel, pose, hx + shake[0], hy + 126.0 * s + shake[1], s, tod, drawing=drawing, light=plight)
+    core.over_rgba(inner, cel.rgba())
+    inner *= rocket.cockpit_mask(cx, cy, r)[..., None]
+    if sig_face > 0.35:
+        inner = core.gblur(inner, sig_face)
+    core.over(pic, inner)
+    cel = core.Cel(ss=ss)
+    rocket.draw_cockpit_front(cel, tod, drawing, cx, cy, r, reflect=reflect, light=lt, fog=fog)
+    front = cel.rgba()
+    if sig_front > 0.35:
+        front = core.gblur(front, sig_front)
+    core.over(pic, front)
+    return pic, an
+
+
+def jitter(pose, key, amp):
+    """Small nervous trembles (whiskers, cheeks): changes with `key`."""
+    if amp <= 0.01:
+        return pose
+    from . import panda
+    q = core.rng("jit", key).normal(0, 1, 4) * amp
+    return panda.replace(pose, tilt=pose.tilt + q[0] * 0.6, head_dx=pose.head_dx + q[1] * 0.35,
+                         head_dy=pose.head_dy + q[2] * 0.35, cheek=max(pose.cheek + q[3] * 0.05, 0.0))

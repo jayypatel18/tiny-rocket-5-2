@@ -512,7 +512,7 @@ def _bounds(pts, m):
 # ----------------------------------------------------------------------- ears
 def _ear(ball, side, flat, s):
     """A wide round ear on the corner of the head, shorter than it is wide."""
-    f = max(flat, -0.6)
+    f = flat * 0.62 if flat > 0 else max(flat, -0.6)     # even flat back, the ears still show: they are the silhouette
     # base points; when they go behind the head they are pulled to the silhouette, so the far ear
     # rises from the outline instead of poking out as a spike
     pa, za = ball.proj(_sph(side * 34, 63), clamp=True)
@@ -811,8 +811,8 @@ def _eyes(p, ball, env, pose, hm, s, anchors):
         def put(q, frm=frm):
             return _put(frm, np.asarray(q, np.float64).reshape(-1, 2), s)
 
-        if pose.squeeze > 0.5:
-            # screwed shut: two heavy strokes that meet toward the nose, like > <
+        if pose.squeeze > 0.5 and opn < 0.1:
+            # screwed shut (an eye that is open while squeeze is on is drawn open: the one eye peek): two heavy strokes that meet toward the nose, like > <
             tipq = np.array([-sd * 0.62 * ew, 0.10 * eh])
             for oy, wk in ((-0.62, 2.9), (0.60, 2.3)):
                 o0 = np.array([sd * 0.98 * ew, oy * eh])
@@ -940,12 +940,12 @@ def _goggles(p, ball, env, pose, hm, s):
         lo, la = _ell(clo, cla, r0 * 0.74, r0 * 0.74, 26)
         ip_, _ = ball.proj(_sph(lo, la, rr))
         if g > 0.5:
-            p.fill(ip_, glass, form=False, alpha=0.32)
+            p.fill(ip_, glass, form=False, alpha=0.15)      # nearly clear: the eyes must read through the lens
         else:
             p.fill(ip_, glass, form=False)
         gm = p.mask(ip_)
-        c0, _ = ball.proj(_sph(clo - 4, cla + 4, rr))
-        q = np.array([[-0.16, -0.028], [0.04, -0.028], [0.16, 0.028], [-0.04, 0.028]]) * np.ptp(ip_[:, 0])
+        c0, _ = ball.proj(_sph(clo - 8.5, cla + 9.5, rr))
+        q = np.array([[-0.10, -0.016], [0.03, -0.016], [0.10, 0.016], [-0.03, 0.016]]) * np.ptp(ip_[:, 0])
         q = np.c_[q[:, 0] + q[:, 1] * 1.2, q[:, 1] * 2.2 - q[:, 0] * 0.7]
         p.later(c0[0] + q, (1, 1, 1), clip=gm)
         p.ink(op_, env.inkw * 1.05, closed=True, taper=(0, 0))

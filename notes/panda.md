@@ -21,6 +21,20 @@ Start: Tue Nov 10 01:55 IST 2026. Checkpoint 1 at 02:40 IST.
 - 02:15 round 3: new lit colour, warm white, tear marks from inner eye corner to mouth corner, eyes on boards (both match in three quarter view, two tone iris, lash ticks, lower lid), cheek ruff tufts, pear torso with chest ruff and tufted belly, elbows, mitten paws with 4 toe bumps, bigger feet with toes, head and arm cast shadows on the torso, quilt (`blanket`), close up at s 7.2 with taut string.
 - 02:17 round 4: softer ear hollows, fewer bolder cheek tufts, smaller chest ruff, white mask lower on the side of the head.
 
+- 02:20 to 02:31 head rebuilt after the "reads as a fox" note: broad round head (41 x 32 units), white cheek tufts sideways, short muzzle, wide round ears on the corners, strong tear marks, cream tail rings with a dark tip, heavy outer contour that thins and breaks on the lit side, warmer rim. Director approved it.
+- 02:31 API additions: `mirror`, `pose_at`, `follow` (ear and tail springs), `draw_paw_closeup` (crude), smear drawings (`Pose.smear`), `palm_l/palm_r` pads, `blanket`, 36 POSES, full docstring.
+- 02:35 `tr2/panda_shot.py` (cached soft backgrounds, rack focus on a cel layer, bamboo leg, string, pendulum strands, blink and bump helpers) and `tr2/shots/s1_knot.py`. Contact sheet `build/review/strip-s1_knot.jpg`.
+- 02:39 fixed the crash when a part lies outside the Cel (`_Part.mask` returns None when the part is off the cel); tested at x -50, 1950, y 1150, far outside, and with a small offset Cel. Body made rounder (pear torso, round fur bumps, tapered legs, elbow clump), cheek tuft broken into more clumps. Squeezed eyes are now drawn as > <.
+- 02:40 to 05:42 lost to a usage limit.
+- 05:44 to 05:52 the four cockpit cuts through one helper, `panda_shot.window_shot` (back wall, panda clipped by `rocket.cockpit_mask`, front wall and glass): `s5c_breath`, `s4b_goggles`; `s7b_wonder` uses `rocket.draw_cockpit_inside`; `s5a_match` draws its own rim, match, flame, fuse and sparks. Sheets: `build/review/sheet-<cut>.jpg`. Flat ears now only fold 62 percent (a fully flat ear made the head a bald dome), goggle glass nearly clear and its glare smaller so the eyes read.
+
+## Still weak (05:52)
+- s5a: the cup rim is a flat graphic band; the match and flame are small; no smoke wisp.
+- s4b, s5c: the eyes behind the lenses are small on a phone; the peek eye was enlarged but not re checked on a full sheet.
+- s7b: gold light washes out the far eye a little; the sky through the window is simple noise streaks.
+- `draw_paw_closeup` is still a sausage with circle toes.
+- s1: not re viewed since the body and squeeze eye changes (it rendered without error).
+
 ## To do after checkpoint 1
 - `draw_paw_closeup(cel, x, y, s, tod, drawing, paint, press)` for shot 9c.
 - Remaining poses: step back walk keys, read map, wake and stretch, climb (3), cockpit bust, goggles down move, swallow, nod, strike match, paint with paw, climb out sooty, tail curl.

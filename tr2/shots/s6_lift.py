@@ -12,6 +12,7 @@ import os
 import sys
 
 import numpy as np
+from scipy import ndimage
 
 from .. import core, fx, fx_smoke, palette, rocket
 from ..timeline import FPS
@@ -21,7 +22,7 @@ NAME = "s6_lift"
 TOD = "launch"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE = os.path.join(ROOT, "build", "cache", "fx", "s6")
-SIM_VERSION = 6
+SIM_VERSION = 7
 RX = common.ROCKET_X
 IGN = common.cue("ignition", NAME)
 LIFT = common.cue("liftoff", NAME)
@@ -171,12 +172,14 @@ def build_sim(n_frames=N_SIM, log=True, force=False):
                           follow=(0.10, 0.9), key=1, pw=2.7, kids=4)
             if tau > 0:
                 # the column under the climbing rocket: born in the jet, thrown down, then it hangs and widens
-                acc[3] += 150.0 * dt
+                acc[3] += 170.0 * dt
                 n = int(acc[3])
                 acc[3] -= n
-                lob.spawn(t, noz[0], noz[1] + 26.0 * sc, n, r=(16.0 * sc, 100.0 * sc), jit=(26.0 * sc, 20.0 * sc),
-                          vel=(0.0, 540.0 * sc), vjit=(120.0 * sc, 140.0 * sc), life=(3.4, 6.2), rise=-8.0, grow=2.0,
-                          follow=(0.15, 0.45), key=9, pw=2.0, up_only=False, kids=3, kid_min=40.0 * sc)
+                # born a little "earlier" so they are already swollen where they leave the flame; they hang
+                # where they were made, so the column is continuous, widens with age and tapers to the rocket
+                lob.spawn(t - 0.12, noz[0], noz[1] + 70.0 * sc, n, r=(22.0 * sc, 92.0 * sc), jit=(30.0 * sc, 34.0 * sc),
+                          vel=(0.0, 150.0 * sc), vjit=(95.0 * sc, 80.0 * sc), life=(3.0, 5.6), rise=-6.0, grow=2.4,
+                          follow=(0.10, 0.35), key=9, pw=1.6, up_only=False, kids=3, kid_min=46.0 * sc)
             lob.step(t, dt, sim)
         t = k * dt
         tmp = _path(fl) + ".tmp.npz"
@@ -257,7 +260,8 @@ def render(fl, n, f):
     try:
         from .. import hillset as hs
         if ground_on:
-            hs.render_back(pic, cam, TOD, f, wind=wind, flatten=flat, rocket_shadow=0.0 if burning else 1.0,
+            hs.render_back(pic, cam, TOD, f, wind=wind, flatten=flat,
+                           rocket_shadow=1.0 - core.smooth(core.span(t, IGN, LIFT)),
                            fire=(RX, g0 - 10.0, 430.0, fire_amt) if fire_amt > 0.01 else None)
     except Exception as e:  # noqa
         print("s6 hillset:", repr(e)[:200])
@@ -286,7 +290,7 @@ def render(fl, n, f):
     fire_xy = (end[0], end[1] - 14 * s * foot)
     smoke = None
     if burning and len(fd["lobes"]):
-        smoke = fx_smoke.render(fd["lobes"], fd["t"], f, TOD, (s, tx, ty), seed=6,
+        smoke = fx_smoke.render(fd["lobes"], fd["t"], f, TOD, (s, tx, ty), seed=6, soft=4.5, haze=0.36,
                                 fire=(fire_xy[0], fire_xy[1], flick * (0.55 + 0.45 * near), 410.0 * s * max(m["scale"], 0.5)))
     fl_lay = None
     if burning:
@@ -354,12 +358,28 @@ def render(fl, n, f):
     # the first clouds, then the bank that swallows the rocket
     bank, base = cloud_bank()
     if (base + 900.0) * s + ty > -40:
-        ctod = palette.blend_tod("launch", "sunrise", 0.45)
-        cl = fx_smoke.render(bank, 0.0, f, ctod, (s, tx, ty), seed=31, soft=9.0, haze=0.45, warm_top=0.55)
+        # painted, a little out of focus: the lobes give the masses, then they are softened hard, the
+        # dawn puts a rose band along every lower edge, and a brushed texture breaks the fills
+        ctod = palette.blend_tod("launch", "sunrise", 0.5)
+        q = 0.5
+        h2, w2 = core.H // 2, core.W // 2
+        cl = fx_smoke.render(bank, 0.0, 0, ctod, (s * q, tx * q, ty * q), seed=31, hw=(h2, w2), soft=10.0, haze=0.5,
+                             warm_top=0.6)
+        lay = core.gblur(cl["layer"], 5.0)
+        al = lay[..., 3]
+        d = 16
+        below = np.zeros_like(al)
+        below[:-d] = al[d:]
+        edge = core.gblur(np.clip(al - below, 0, 1), 5.0)
+        rose = np.array([1.0, 0.70, 0.62], np.float32)
+        lay[..., :3] += (rose[None, None, :] * al[..., None] - lay[..., :3]) * (edge * 0.75)[..., None]
+        tex = core.fbm(h2, w2, 14.0, 3, seed=5, aspect=3.0, ox=-tx * q, oy=-ty * q)
+        lay[..., :3] *= (0.94 + 0.12 * tex)[..., None]
+        lay = np.ascontiguousarray(ndimage.zoom(lay, (2, 2, 1), order=1)[:core.H, :core.W], np.float32)
         hid = core.smooth(core.span((base - (g0 - m["H"])), -40.0, 120.0))     # how deep the rocket is in the bank
         if hid > 0.02:
             fx.glow_at(pic, noz[0], noz[1], 150.0 * s, (1.0, 0.70, 0.40), 0.5 * hid)
-        core.over(pic, cl["layer"])
+        core.over(pic, lay)
         if hid > 0.02:
             fx.glow_at(pic, noz[0], noz[1] - 30 * sc, 170.0 * s, (1.0, 0.78, 0.52), 0.30 * hid)
 
@@ -373,9 +393,9 @@ def render(fl, n, f):
         opts = dict(bloom_amt=0.9, bloom_thr=0.6, vig=0.05)
     elif fl in (F_IGN + 1, F_IGN + 2):
         kx = 1.0 if fl == F_IGN + 1 else 0.55
-        fx.glow_at(pic, gsx, gsy - 60 * s, 620.0 * s, (1.0, 0.90, 0.70), 0.85 * kx)
-        pic[:] = np.clip(pic * (1.0 + 0.9 * kx) + 0.10 * kx, 0, 1)
-        opts = dict(bloom_amt=0.75 + 0.75 * kx, bloom_thr=0.70 - 0.22 * kx, vig=0.10)
+        fx.glow_at(pic, gsx, gsy - 60 * s, 560.0 * s, (1.0, 0.88, 0.66), 0.50 * kx)
+        pic[:] = np.clip(pic * (1.0 + 0.38 * kx) + 0.03 * kx, 0, 1)
+        opts = dict(bloom_amt=0.75 + 0.50 * kx, bloom_thr=0.72 - 0.12 * kx, vig=0.10)
     elif burning and ti < 0.6:
         opts = dict(bloom_amt=0.62 + 0.3 * (1 - ti / 0.6), bloom_thr=0.76)
     return pic, opts

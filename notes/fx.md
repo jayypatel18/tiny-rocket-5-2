@@ -30,6 +30,23 @@ Start: Tue Nov 10 01:54 IST 2026. Checkpoint 1 due 02:40 IST.
 - 02:31 `fx.sparks_layer` fixed for animation: birth times are fixed (new `dur`), and `xf=(s, tx, ty)` runs the sparks in SET px and draws them through the camera.
 - 02:33 `tr2/fx_smoke.py`: smoke version 2 for motion. `Lobes` (spawn, step, alive, prune), `radius`, `render` (soft silhouette, wispy edge bites, haze, warp anchored to the set, fixed stack order: no popping, no boil), `flame` (ground splash field plus a jet tongue with a bell foot or a free tail).
 - 02:36 `tr2/shots/s6_lift.py`: choreography (`height`, `motion`, `camera`), `build_sim` (cache `build/cache/fx/s6/v3_fNNN.npz`: lobes, flame field F, t), `render`, `smoketest`. Camera: zoom 1.75 close and low, tilt follows with a lag, zoom eases to 1.5. Ignition: white frame at fl 7, two blown out frames, shake 36 px decaying.
+- 02:38 first full sheet of s6 worked end to end. Child lobes ("kids") on every big lobe give the cauliflower look; the crest grass band goes behind the smoke once it burns.
+- 02:40 to 05:42: cut off by a usage limit. Director's finishing list on return: soft painted near clouds, a continuous trail column, softer ground smoke silhouette plus haze, one white flash frame, `render_back(fire=..., rocket_shadow=...)` and the travelling flatten ring.
+- 05:44 done, sim cache is now `v7_fNNN.npz` (older v3 to v6 files in `build/cache/fx/s6/` are stale and can be deleted):
+  - Trail: lobes are born 0.12 s "early" (already swollen), hang where they are made (150 px/s throw, low follow), sizes 22 to 92 px times the rocket scale, grow 2.4, three kids each: a continuous column that tapers to the rocket and widens below.
+  - Near clouds: the lobe bank is rendered at half size, blurred (sigma 5 at half size), given a rose band along every lower edge and a brushed texture, then scaled up. The rocket's flame glows through as it enters.
+  - Ignition: fl 7 is the white frame, fl 8 and 9 are over exposed with strong bloom (changed from pure white, not looked at since), shake 36 px decaying.
+  - Ground smoke: soft=4.5 px edge, haze 0.36. `rocket_shadow` fades from 1 to 0 between ignition and lift off.
+  - Looked at 12 consecutive frames (fl 14 to 25) as one tiled still: lobes grow and drift smoothly, no popping seen. The clip itself was not watched.
+- Outputs: `build/review/sheet-s6_lift.jpg`, `build/seg/s6_lift.mp4` (half size clip).
+
+## Still weak in s6 (not done)
+- No torn leaves at ignition or as it passes the tree; the canopy only sways harder (`wind`).
+- The orange lit kids make a busy row of small orange petals along the front smoke line.
+- The front smoke is the same layer drawn again below a wandering line, not a separate nearer layer.
+- My soft clouds and builder C's painted sky clouds are two different hands; mine are plainer.
+- The view blend low34 to below changes the rocket's proportions while it climbs; watch it in motion.
+- Frame cost about 4.5 to 5 s on one core.
 
 ## Manager notes for s6 (relayed 02:22)
 1. Smoke must BILLOW and be tested in motion first; soft outer silhouette (2 to 4 px), wispy translucent edges, faint outer haze; tone boundaries inside stay crisp; orange inside, cool sky blue on top.
