@@ -23,8 +23,8 @@ WEB = os.path.join(ROOT, "docs", "film.mp4")
 POSTER = os.path.join(ROOT, "docs", "poster.jpg")
 
 # Frames for the three stills (same three moments as the 5.1 stills). Set when the picture is final.
-STILLS = {"still-closeup.png": 96, "still-climax.png": 1310, "still-title.png": 1735}
-POSTER_FRAME = 1310
+STILLS = {"still-closeup.png": 56, "still-climax.png": 1308, "still-title.png": 1735}
+POSTER_FRAME = 1308
 
 
 def run(cmd):
@@ -54,12 +54,18 @@ def join():
 
 def x():
     os.makedirs(os.path.dirname(XFILE), exist_ok=True)
-    run(["ffmpeg", "-v", "error", "-y", "-i", MASTER, "-i", WAV, "-map", "0:v:0", "-map", "1:a:0",
-         "-c:v", "libx264", "-preset", "slow", "-crf", "15", "-profile:v", "high", "-pix_fmt", "yuv420p",
-         "-r", str(FPS), "-g", "48", "-bf", "2", "-colorspace", "bt709", "-color_primaries", "bt709",
-         "-color_trc", "bt709", "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-shortest",
-         "-movflags", "+faststart", XFILE])
-    print("X file: %.1f MB" % (os.path.getsize(XFILE) / 1e6))
+    # the picture has film grain, so it is expensive to encode: step the quality down until
+    # the file is safely under X's 500 MB (CRF 15 came out at 747 MB)
+    for crf in (18, 19, 20, 21, 22):
+        run(["ffmpeg", "-v", "error", "-y", "-i", MASTER, "-i", WAV, "-map", "0:v:0", "-map", "1:a:0",
+             "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-profile:v", "high", "-pix_fmt", "yuv420p",
+             "-r", str(FPS), "-g", "48", "-bf", "2", "-colorspace", "bt709", "-color_primaries", "bt709",
+             "-color_trc", "bt709", "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-shortest",
+             "-movflags", "+faststart", XFILE])
+        mb = os.path.getsize(XFILE) / 1e6
+        print("X file: %.1f MB at CRF %d" % (mb, crf))
+        if mb < 470:
+            break
 
 
 def web():

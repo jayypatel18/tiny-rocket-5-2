@@ -48,6 +48,13 @@ def grade(pic, tod, strength=1.0):
     out = np.clip(out, 0, 1)
     # soft S curve: a little more contrast in the mids, protected ends
     out = out + 0.10 * strength * (out - 0.5) * (1 - (2 * out - 1) ** 2)
+    # the dark cuts (night, first light, launch) get deeper shadows: values under about 0.35
+    # are pulled down a little, so the frame has a real black point instead of a blue wash
+    name = tod if isinstance(tod, str) else None
+    deep = {"night": 0.16, "predawn": 0.13, "launch": 0.15}.get(name, 0.0)
+    if deep > 0:
+        k = np.clip(1 - out / 0.38, 0, 1)
+        out = out * (1 - deep * k)
     pic[:] = np.clip(out, 0, 1)
     return pic
 
@@ -74,7 +81,7 @@ def grain(pic, f, amount=0.022, paper=1.0):
     return pic
 
 
-def finish(pic, tod, f, bloom_amt=0.5, bloom_thr=0.78, vig=0.22, grain_amt=0.022, paper=1.0, fade=None):
+def finish(pic, tod, f, bloom_amt=0.5, bloom_thr=0.78, vig=0.22, grain_amt=0.013, paper=0.8, fade=None):
     """The whole chain. `fade` = (colour, amount) for fades to paper or black."""
     if bloom_amt > 0:
         bloom(pic, bloom_thr, bloom_amt)

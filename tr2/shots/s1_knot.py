@@ -214,8 +214,10 @@ def render(fl, n, f):
         v0 = units(np.array([16.5, 59.5])) - knot
         ps.draw_string(cel, ps.pendulum(knot, v0, tk - T_DROP2, damp=3.4, freq=7.5), s, TOD)
 
-    # rack focus: opens on the knot and the paws, the face a little soft; it finds the face before the tug
-    u = core.smooth(core.span(t, 0.22, 0.80))
+    # Director: the face is sharp from frame 0 (the first frame is what X shows before it plays).
+    # The rack happens later: the knot and paws sit a little soft until the panda leans in to
+    # inspect its work at 2.8 s, when they come into focus.
+    u = 1.0
     v = core.smooth(core.span(t, 2.8, 3.1))
     layer = ps.rack(cel.rgba(), knot + np.array([30.0, 10.0]), 300.0 * z, 3.4 * (1 - u), 2.4 * u * (1 - 0.8 * v))
     core.over(pic, layer)

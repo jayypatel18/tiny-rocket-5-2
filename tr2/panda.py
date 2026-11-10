@@ -374,6 +374,7 @@ class _Part:
         self.fd = ImageDraw.Draw(self.form)
         self.cast = Image.new("L", self.size, 0)
         self.cd = ImageDraw.Draw(self.cast)
+        self.keep = Image.new("L", self.size, 0)      # shapes the second light must not wash out (the eyes)
 
     def _xy(self, pts):
         p = np.asarray(pts, np.float64)
@@ -413,6 +414,10 @@ class _Part:
             self.im.paste(c, (0, 0), m)
         if form:
             self.fd.polygon(xy, fill=255)
+
+    def protect(self, pts):
+        if self.ok and len(pts) >= 3:
+            ImageDraw.Draw(self.keep).polygon(self._xy(pts), fill=255)
 
     def shadow(self, pts):
         if self.ok and len(pts) >= 3:
@@ -485,7 +490,8 @@ class _Part:
                 ld = np.asarray(e.light["dir"], np.float64)
                 ld = ld / max(np.hypot(*ld), 1e-6)
                 am = e.light["amount"]
-                m2 = ImageChops.subtract(self.form, self._shift(self.form, -ld[0] * d_sh * 1.7, -ld[1] * d_sh * 1.7))
+                m2 = ImageChops.subtract(self.form, self._shift(self.form, -ld[0] * d_sh * 1.3, -ld[1] * d_sh * 1.3))
+                m2 = ImageChops.subtract(m2, self.keep)
                 lc = tuple(int(core.clamp(v * am * 0.75) * 255) for v in e.light["color"])
                 rgb = Image.composite(ImageChops.screen(rgb, Image.new("RGB", self.size, lc)), rgb, m2)
             rm = ImageChops.subtract(self.form, self._shift(self.form, -sx * d_rim, -sy * d_rim))
@@ -853,6 +859,7 @@ def _eyes(p, ball, env, pose, hm, s, anchors):
         ep = put(shape)
         em = p.mask(ep, hm)
         p.fill(ep, eyec, form=False, clip=hm)
+        p.protect(ep)
         cx_, cy_ = px * 2.4, 0.06 * eh - py * 2.4
         p.fill(put(core.ellipse(cx_, cy_, 0.86 * ew, 0.84 * eh, 28)), palette.mix(iris, eyec, 0.5), form=False, clip=em)
         p.fill(put(core.ellipse(cx_, cy_ + 0.40 * eh, 0.74 * ew, 0.50 * eh, 26)), iris, form=False, clip=em)
@@ -1420,7 +1427,8 @@ def draw_paw_closeup(cel, x, y, s=1.0, tod="morning", drawing=0, paint=1.0, pres
     above. A ruff of fur at the wrist, a mitten paw with four toes: three
     curled, one stretched out so its tip touches (x, y), carrying a dab of gold
     paint (paint 0..1). press 0..1 flattens the toe tip on the paper. One hard
-    shadow tone and a rim like the body. About 700 px long at s = 1."""
+    shadow tone and a rim like the body. The forearm is 1500 px long at s = 1, so it
+    always runs off the frame at the lower right."""
     env = _Env(tod, 3.6 * s, drawing, None)
     env.pad = int(44 * s) + 8
     dark = env.c("dark")
@@ -1434,13 +1442,13 @@ def draw_paw_closeup(cel, x, y, s=1.0, tod="morning", drawing=0, paint=1.0, pres
     def Lp(a, b):
         return P0 - d * a * s + nv * b * s
 
-    p = _Part(cel, _bounds(np.array([Lp(-40, -190), Lp(-40, 190), Lp(740, -190), Lp(740, 190)]), 10), env)
+    p = _Part(cel, _bounds(np.array([Lp(-40, -230), Lp(-40, 230), Lp(1560, -240), Lp(1560, 240)]), 10), env)
     if not p.ok:
         return
     w = env.inkw
     cen = Lp(150, 0)
     # the forearm: heavy toward the elbow, narrowing to the wrist, never two parallel lines
-    arm, c, Lf, Rt, t, wv = _tube([Lp(720, 50), Lp(530, 30), Lp(370, 10), Lp(236, 2)], np.array([90, 84, 70, 60]) * s, n=44)
+    arm, c, Lf, Rt, t, wv = _tube([Lp(1500, 112), Lp(900, 64), Lp(530, 30), Lp(370, 10), Lp(236, 2)], np.array([114, 100, 86, 70, 60]) * s, n=44)
     p.fill(arm, dark)
     # the mitten, seen from above
     palm = core.catmull([Lp(236, 62), Lp(180, 86), Lp(112, 82), Lp(70, 46), Lp(66, -44), Lp(108, -82), Lp(178, -86),
